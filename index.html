@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>甩甩生涯助手</title>
+<style>
+  :root{
+    --bg:linear-gradient(160deg,#eaf2fb 0%,#f4f0fa 52%,#e9faf4 100%);
+    --brand:#0d9488;        /* 青绿主强调（浅底加深） */
+    --brand2:#0284c7;       /* 天蓝辅助（浅底加深） */
+    --grad:linear-gradient(120deg,#14b8a6,#0ea5e9);
+    --ink:#1f2937;          /* 深色主文字 */
+    --mut:#64748b;          /* 中灰次要文字 */
+    --glass:rgba(255,255,255,.66);
+    --glass2:rgba(255,255,255,.82);
+    --bd:rgba(15,23,42,.10);
+    --bd2:rgba(15,23,42,.16);
+    --shadow:0 24px 60px -24px rgba(15,23,42,.28);
+    --radius:20px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.6;-webkit-font-smoothing:antialiased;padding-bottom:60px;min-height:100vh;overflow-x:hidden;
+  }
+  /* 背景光斑（现代毛玻璃氛围） */
+  .orb{position:fixed;border-radius:50%;filter:blur(90px);opacity:.5;z-index:-1;pointer-events:none}
+  .orb.a{width:520px;height:520px;background:#5eead4;top:-160px;right:-120px}
+  .orb.b{width:460px;height:460px;background:#7dd3fc;bottom:-180px;left:-140px}
+  .orb.c{width:360px;height:360px;background:#a7f3d0;top:40%;left:50%;transform:translateX(-50%)}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+
+  /* 顶栏（玻璃 · Hero + 大图书水印） */
+  .topbar{
+    background:rgba(255,255,255,.55);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);
+    border:1px solid var(--bd);border-radius:0 0 28px 28px;padding:26px 0 22px;margin-bottom:26px;
+    position:relative;overflow:hidden;
+  }
+  .hero-book{position:absolute;right:18px;top:50%;transform:translateY(-50%);width:210px;height:210px;opacity:.18;pointer-events:none;z-index:0}
+  .topbar .wrap{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;position:relative;z-index:1}
+  .ttl{display:flex;flex-direction:column;gap:6px;min-width:0}
+  .ttl h1{font-size:27px;font-weight:800;letter-spacing:.3px;display:flex;align-items:center;gap:10px}
+  .ttl h1 .dot{width:11px;height:11px;border-radius:50%;background:#34d399;box-shadow:0 0 0 4px rgba(52,211,153,.25)}
+  .meta{font-size:13px;color:var(--mut)}
+  .week-tag{display:inline-block;margin-left:8px;padding:2px 10px;border-radius:999px;font-weight:700;color:#04141a;background:var(--grad);box-shadow:0 4px 14px -6px rgba(45,212,191,.6)}
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .phase-tab{
+    border:1px solid var(--bd);background:var(--glass);color:var(--mut);
+    padding:9px 18px;border-radius:30px;font-size:13.5px;cursor:pointer;font-weight:600;transition:.25s;backdrop-filter:blur(8px);
+  }
+  .phase-tab:hover{color:var(--ink);border-color:var(--bd2)}
+  .phase-tab.active{background:var(--grad);color:#04141a;border-color:transparent;box-shadow:0 8px 22px -8px rgba(45,212,191,.6)}
+
+  .banner{background:rgba(13,148,136,.09);border:1px solid rgba(13,148,136,.28);color:#0f766e;border-radius:14px;padding:12px 16px;font-size:13px;margin-bottom:22px;position:relative;overflow:hidden}
+  .banner::before{content:"📖";position:absolute;right:-6px;bottom:-14px;font-size:54px;opacity:.12;pointer-events:none}
+
+  /* 课表 */
+  .board{display:block}
+  table.grid{width:100%;border-collapse:separate;border-spacing:11px}
+  table.grid th{font-size:13.5px;color:var(--mut);font-weight:600;padding:6px}
+  table.grid td.period{background:var(--glass);border:1px solid var(--bd);border-radius:16px;text-align:center;width:96px;padding:12px 6px;backdrop-filter:blur(10px)}
+  table.grid td.period b{display:block;font-size:13.5px;color:var(--ink)}
+  table.grid td.period span{font-size:11.5px;color:var(--mut)}
+  table.grid td.cell{vertical-align:top;height:80px}
+  .course{
+    border-radius:15px;padding:10px 12px;cursor:pointer;height:100%;
+    background:color-mix(in srgb,var(--cc) 15%, var(--glass));
+    border:1px solid color-mix(in srgb,var(--cc) 32%, transparent);
+    border-left:3px solid var(--cc);
+    transition:transform .2s,box-shadow .2s,background .2s;
+    display:flex;flex-direction:column;gap:3px;overflow:hidden;color:var(--ink);
+  }
+  .course:hover{transform:translateY(-3px);box-shadow:0 14px 30px -14px color-mix(in srgb,var(--cc) 55%,transparent);background:color-mix(in srgb,var(--cc) 24%,var(--glass))}
+  .course .name{font-size:13px;font-weight:700;line-height:1.3}
+  .course .tag{display:inline-block;font-size:10.5px;background:color-mix(in srgb,var(--cc) 16%,transparent);color:color-mix(in srgb,var(--cc) 55%,#0f172a);padding:1px 6px;border-radius:6px;margin-right:4px;margin-top:2px;font-weight:600}
+  .course .info{font-size:11.5px;color:var(--mut)}
+  .course .slot{font-size:10.5px;color:color-mix(in srgb,var(--cc) 55%,#0f172a);margin-top:auto;font-weight:600}
+
+  /* 移动列表 + 进行中/即将 */
+  .mobile-list{display:none}
+  .now-box{display:grid;gap:12px;margin-bottom:18px}
+  .now-card{background:var(--glass);border:1px solid var(--bd);border-radius:16px;padding:14px 16px;backdrop-filter:blur(14px);position:relative;overflow:hidden}
+  .now-card.live{border-color:rgba(52,211,153,.5);box-shadow:0 0 0 1px rgba(52,211,153,.25)}
+  .now-head{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--mut);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}
+  .now-head .pulse{width:9px;height:9px;border-radius:50%;background:#34d399;box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 1.6s infinite}
+  .now-head .clk{width:9px;height:9px;border-radius:50%;background:var(--brand)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}70%{box-shadow:0 0 0 9px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
+  .now-item{border-left:3px solid var(--cc);background:color-mix(in srgb,var(--cc) 12%,transparent);border-radius:12px;padding:10px 13px;margin-top:8px}
+  .now-item:first-of-type{margin-top:0}
+  .now-item .n{font-size:14px;font-weight:700}
+  .now-item .s{font-size:12px;color:var(--mut);margin-top:2px}
+  .now-empty{font-size:13px;color:var(--mut);padding:6px 2px}
+
+  /* 未完成作业提醒：走字屏（横幅自动横向滚动，纯提醒无交互） */
+  .task-ticker{display:none;align-items:center;gap:12px;overflow:hidden;background:linear-gradient(135deg,rgba(251,191,36,.16),rgba(248,113,113,.14));border:1px solid rgba(234,179,8,.45);border-radius:14px;padding:10px 14px;backdrop-filter:blur(14px);margin-bottom:18px}
+  .task-ticker .tk-head{flex-shrink:0;font-size:13px;font-weight:700;color:#b45309;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+  .task-ticker .tk-view{flex:1;overflow:hidden;position:relative;-webkit-mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent);mask-image:linear-gradient(90deg,transparent,#000 4%,#000 96%,transparent)}
+  .task-ticker .tk-track{display:inline-block;white-space:nowrap;will-change:transform;animation:tk-scroll linear infinite}
+  .task-ticker:hover .tk-track{animation-play-state:paused}
+  .task-ticker .tk-item{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:#374151;margin-right:30px}
+  .task-ticker .tk-item .cc-dot{width:8px;height:8px;border-radius:50%;background:var(--cc);flex-shrink:0}
+  .task-ticker .tk-item .tk-cls{font-weight:700}
+  .task-ticker .tk-item .tk-due{font-size:11.5px;color:var(--mut);white-space:nowrap}
+  .task-ticker .tk-item .tk-due.overdue{color:#f87171;font-weight:600}
+  @keyframes tk-scroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+
+  .day-block{background:var(--glass);border:1px solid var(--bd);border-radius:18px;padding:16px 18px;margin-bottom:14px;backdrop-filter:blur(12px)}
+  .day-block.is-today{border-color:var(--brand);box-shadow:0 0 0 1px rgba(45,212,191,.25)}
+  .day-head{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;margin-bottom:10px}
+  .today-badge{background:var(--grad);color:#04141a;font-size:11px;padding:2px 10px;border-radius:20px;font-weight:700}
+  .m-slot{margin:10px 0;padding-top:10px;border-top:1px dashed var(--bd)}
+  .m-time{font-size:12px;color:var(--mut);margin-bottom:6px}
+  .m-cards{display:flex;flex-direction:column;gap:8px}
+  .m-cards .course{height:auto}
+
+  /* 学分（玻璃） */
+  .credit-sec{margin-top:34px;background:var(--glass);border:1px solid var(--bd);border-radius:var(--radius);padding:26px;backdrop-filter:blur(16px)}
+  .credit-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+  .credit-head h3{font-size:19px}
+  .total-wrap{display:flex;align-items:center;gap:12px;flex:1;min-width:240px;max-width:440px}
+  .total-wrap .bar{flex:1;height:10px;background:rgba(15,23,42,.10);border-radius:20px;overflow:hidden}
+  .total-wrap .bar i{display:block;height:100%;background:var(--grad);border-radius:20px}
+  .total-wrap span{font-size:13px;font-weight:600;white-space:nowrap}
+  .cat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .cat-card{border:1px solid var(--bd);border-radius:16px;padding:15px;background:rgba(255,255,255,.55)}
+  .cat-top{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;font-weight:700}
+  .cat-top .num{font-size:13px;padding:2px 9px;border-radius:8px;font-weight:700}
+  .num.ok{background:rgba(52,211,153,.16);color:#34d399}
+  .num.half{background:rgba(251,191,36,.16);color:#fbbf24}
+  .num.lack{background:rgba(248,113,113,.16);color:#f87171}
+  .cat-card .bar{height:7px;background:rgba(15,23,42,.10);border-radius:20px;overflow:hidden;margin:10px 0}
+  .cat-card .bar i{display:block;height:100%;background:#4b5563;border-radius:20px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .chip{font-size:11.5px;background:rgba(15,23,42,.05);color:var(--ink);padding:3px 9px;border-radius:8px;cursor:pointer;transition:.2s;border:1px solid transparent}
+  .chip:hover{background:rgba(45,212,191,.16);border-color:rgba(45,212,191,.4)}
+  .miss{font-size:12px;color:var(--mut)}
+  .cat-note{font-size:11.5px;color:var(--mut);line-height:1.5}
+  .req-note{margin-top:18px;font-size:12.5px;color:var(--mut);background:rgba(15,23,42,.03);border-radius:12px;padding:13px 15px;line-height:1.7}
+
+  .foot{margin-top:26px;font-size:12.5px;color:var(--mut);background:var(--glass);border:1px solid var(--bd);border-radius:16px;padding:16px 18px;line-height:1.7;backdrop-filter:blur(12px)}
+
+  /* 弹窗（浅色毛玻璃 + 动画） */
+  .overlay{
+    position:fixed;inset:0;background:rgba(15,23,42,.4);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
+    display:flex;align-items:center;justify-content:center;z-index:100;padding:18px;
+    opacity:0;visibility:hidden;transition:opacity .28s ease,visibility .28s;
+  }
+  .overlay.open{opacity:1;visibility:visible}
+  .panel{
+    width:min(580px,100%);max-height:90vh;overflow:auto;
+    background:linear-gradient(180deg, rgba(255,255,255,.95), rgba(246,249,252,.92));
+    backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px);
+    border:1px solid var(--bd2);border-radius:24px;box-shadow:var(--shadow);color:#46505e;
+    transform:translateY(18px) scale(.95);opacity:0;
+    transition:transform .34s cubic-bezier(.2,.85,.25,1),opacity .3s ease;
+  }
+  .overlay.open .panel{transform:translateY(0) scale(1);opacity:1}
+  .panel-head{padding:22px 24px;color:var(--cc-ink,#fff);border-radius:24px 24px 0 0;position:relative}
+  .panel-head h2{font-size:19px}
+  .panel-head .meta{font-size:12.5px;opacity:.92;margin-top:5px}
+  .close-x{position:absolute;right:16px;top:16px;background:rgba(255,255,255,.25);border:none;color:#fff;width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;transition:.2s}
+  .close-x:hover{background:rgba(255,255,255,.42);transform:rotate(90deg)}
+  .tabs{display:flex;gap:6px;padding:14px 24px 0}
+  .tab-btn{border:1px solid var(--bd);background:rgba(15,23,42,.04);color:var(--mut);padding:8px 16px;border-radius:10px;font-size:13.5px;cursor:pointer;font-weight:600;transition:.2s}
+  .tab-btn:hover{color:#46505e}
+  .tab-btn.active{background:var(--cc,#14b8a6);color:var(--cc-ink,#04141a);border-color:transparent}
+  .tab-body{padding:18px 24px 24px}
+  .tip{font-size:12.5px;color:var(--mut);margin-bottom:10px}
+  textarea{width:100%;border:1px solid var(--bd);background:rgba(15,23,42,.04);color:#46505e;border-radius:12px;padding:11px 13px;font-size:13.5px;font-family:inherit;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--cc,#14b8a6)}
+  .input-row{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+  .input-row textarea{flex:1;min-width:200px;min-height:60px}
+  .input-row input[type=date]{border:1px solid var(--bd);background:rgba(15,23,42,.05);color:var(--ink);border-radius:10px;padding:8px;font-size:13px}
+  .add-btn{border:none;background:var(--cc,#14b8a6);color:var(--cc-ink,#04141a);padding:9px 18px;border-radius:11px;font-size:13.5px;cursor:pointer;font-weight:700;white-space:nowrap;transition:.2s}
+  .add-btn:hover{filter:brightness(1.08)}
+  .item-list{margin-top:14px;display:flex;flex-direction:column;gap:9px}
+  .item{display:flex;gap:10px;align-items:flex-start;background:rgba(15,23,42,.04);border:1px solid var(--bd);border-left:3px solid color-mix(in srgb,var(--cc,#14b8a6) 40%,transparent);border-radius:12px;padding:11px 13px;animation:slideIn .25s ease}
+  .check-task{width:16px;height:16px;flex-shrink:0;margin-top:2px;accent-color:var(--cc,#14b8a6);cursor:pointer}
+  @keyframes slideIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  .item.done .txt{text-decoration:line-through;opacity:.5}
+  .item .txt{flex:1;font-size:13.5px}
+  .item .txt .time,.item .txt .due{display:block;font-size:11px;color:var(--mut);margin-top:3px}
+  .item .txt .due.overdue{color:#f87171;font-weight:600}
+  .item .del{border:none;background:rgba(248,113,113,.16);color:#f87171;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .empty{color:var(--mut);font-size:13px;text-align:center;padding:18px}
+  .save-hint{font-size:12px;color:var(--cc,#34d399);margin-top:7px;opacity:0;transition:.3s}
+  .save-hint.show{opacity:1}
+
+  .toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(20px);background:rgba(20,25,36,.9);backdrop-filter:blur(10px);color:#fff;padding:11px 20px;border-radius:30px;font-size:13.5px;opacity:0;pointer-events:none;transition:.3s;z-index:200;box-shadow:var(--shadow);border:1px solid var(--bd)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* ===== 响应式：PC / iPad / iPhone ===== */
+  /* iPad 及以下：表格仍显示，缩小卡片字号 */
+  @media (max-width:1024px){
+    table.grid td.period{width:84px}
+    table.grid{border-spacing:8px}
+    .course .name{font-size:12px}
+    .course .info{font-size:10.5px}
+    .cat-grid{grid-template-columns:repeat(2,1fr)}
+  }
+  /* iPhone / 手机：隐藏表格，显示列表 + 进行中/即将 */
+  @media (max-width:767px){
+    table.grid{display:none}
+    .mobile-list{display:block}
+    .now-box{display:grid}
+    .topbar{padding:20px 0 18px;border-radius:0 0 22px 22px}
+    .topbar .wrap{flex-direction:column;align-items:flex-start}
+    .hero-book{width:118px;height:118px;right:-10px;top:auto;bottom:-18px;transform:none;opacity:.14}
+    .ttl h1{font-size:22px}
+    .toolbar{width:100%}
+    .phase-tab{flex:1;text-align:center;padding:10px 0}
+    .cat-grid{grid-template-columns:1fr}
+    .credit-sec{padding:20px}
+    .foot{font-size:12px}
+    .panel{border-radius:20px}
+  }
+  /* 大屏 iPhone / 小屏优化 */
+  @media (max-width:380px){
+    .wrap{padding:0 14px}
+    .ttl h1{font-size:20px}
+    .course .tag{font-size:9.5px}
+    .hero-book{display:none}
+  }
+  /* 桌面大屏：更宽松 */
+  @media (min-width:1280px){
+    .wrap{max-width:1240px}
+    table.grid td.period{width:108px}
+  }
+  /* 访问口令遮罩（数据存云端，需口令进入，避免公开链接裸奔） */
+  .pw-mask{display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;
+    background:rgba(245,248,252,.72);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);font-family:inherit}
+  .pw-card{width:min(360px,90vw);background:rgba(255,255,255,.84);border:1px solid var(--bd2);border-radius:24px;
+    box-shadow:var(--shadow);padding:34px 30px;text-align:center;animation:popIn .3s cubic-bezier(.2,.85,.25,1)}
+  .pw-emoji{font-size:42px}
+  .pw-card h2{font-size:20px;margin:8px 0 6px;color:var(--ink)}
+  .pw-sub{font-size:13px;color:var(--mut);margin-bottom:18px;line-height:1.6}
+  .pw-input{width:100%;border:1px solid var(--bd);background:rgba(15,23,42,.05);color:var(--ink);border-radius:12px;
+    padding:12px 14px;font-size:15px;font-family:inherit;text-align:center;letter-spacing:2px}
+  .pw-input:focus{outline:none;border-color:#2dd4bf}
+  .pw-btn{margin-top:14px;width:100%;border:none;background:linear-gradient(120deg,#2dd4bf,#38bdf8);color:#04141a;
+    padding:12px;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;transition:.2s}
+  .pw-btn:hover{filter:brightness(1.05);transform:translateY(-1px)}
+  .pw-err{color:#f87171;font-size:12.5px;margin-top:10px;min-height:16px}
+</style>
+</head>
+<body>
+<div class="orb a"></div><div class="orb b"></div><div class="orb c"></div>
+
+<!-- 访问口令遮罩 -->
+<div class="pw-mask" id="pwMask">
+  <div class="pw-card">
+    <div class="pw-emoji">🔐</div>
+    <h2>课程表已存到云端</h2>
+    <p class="pw-sub">请输入访问口令，查看并同步你的课表、笔记与作业</p>
+    <input id="pwInput" class="pw-input" type="password" placeholder="访问口令" autocomplete="off">
+    <button id="pwBtn" class="pw-btn">进入</button>
+    <div id="pwErr" class="pw-err"></div>
+  </div>
+</div>
+
+<!-- 顶栏 -->
+<div class="topbar">
+  <svg class="hero-book" viewBox="0 0 24 24" aria-hidden="true">
+    <defs><linearGradient id="bg-book" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient></defs>
+    <path d="M2 3.5h6a4 4 0 0 1 4 4V20a3 3 0 0 0-3-3H2z" fill="url(#bg-book)"/>
+    <path d="M22 3.5h-6a4 4 0 0 0-4 4V20a3 3 0 0 1 3-3h7z" fill="url(#bg-book)"/>
+    <path d="M11 7.5V20" stroke="#ffffff" stroke-opacity=".35" stroke-width=".6" fill="none"/>
+  </svg>
+  <div class="wrap">
+    <div class="ttl">
+      <h1><span class="dot"></span>甩甩生涯助手</h1>
+      <div class="meta">冉云杰 ｜ 学号 26725101 ｜ 新闻传播学院 ｜ 2026–2027 学年 秋季学期 <span id="weekTag" class="week-tag"></span></div>
+    </div>
+    <div class="toolbar">
+      <button class="phase-tab active" id="tab1">第 1 ~ 8 周</button>
+      <button class="phase-tab" id="tab2">第 9 ~ 16 周</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="banner" id="syncBanner" style="display:none"></div>
+
+  <div class="board">
+    <div class="now-box" id="nowBox"></div>
+    <div class="task-ticker" id="taskReminder"></div>
+    <div class="grid-wrap" id="grid"></div>
+    <div class="mobile-list" id="mlist"></div>
+  </div>
+
+  <div class="credit-sec">
+    <div class="credit-head">
+      <h3>学分统计（本学期已选课程）</h3>
+      <div class="total-wrap">
+        <div class="bar"><i id="totalBar"></i></div>
+        <span id="totalTxt"></span>
+      </div>
+    </div>
+    <div class="cat-grid" id="catGrid"></div>
+    <div class="req-note">
+      <b>培养方案要求</b>（专业学位硕士研究生最低总学分 <b>37</b>）：公共课 5 或 3 学分（外国语可申请免修）｜ 素质课 5 学分（人工智能 2＋公共体育 1＋创新创业 1＋学术规范与写作 1）｜ 专业基础课 ≥10 或 12 学分 ｜ 专业选修课 ≥12 学分 ｜ 专业实践课程 4 学分 ｜ 学术与技术交流 1 学分。点击类别中的课程标签可查看课程详情。
+    </div>
+  </div>
+
+  <div class="foot">
+    <b>提示：</b>点击任意课程卡片，可添加并查看「课程要求 / 课程笔记 / 课程作业」，内容自动保存在本设备浏览器中。<br>
+    「学术英语写作与交流（硕士）」（陈鑫盛，延长校区）已选课，上课时间与地点待安排，暂未列入表格。
+  </div>
+</div>
+
+<!-- 课程详情弹窗 -->
+<div class="overlay" id="overlay">
+  <div class="panel" id="panel">
+    <div class="panel-head" id="panelHead">
+      <button class="close-x" id="closeX">✕</button>
+      <h2 id="pName"></h2>
+      <div class="meta" id="pMeta"></div>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" id="tabbtn-req" data-tab="req">课程要求</button>
+      <button class="tab-btn" id="tabbtn-note" data-tab="note">课程笔记</button>
+      <button class="tab-btn" id="tabbtn-task" data-tab="task">课程作业</button>
+    </div>
+    <div class="tab-body">
+      <div id="pane-req">
+        <div class="tip">记下老师提出的考核方式、出勤要求、参考书目等，输入后自动保存。</div>
+        <textarea class="req" id="reqText" placeholder="例如：出勤占 10%，期中汇报 30%，期末论文 60%……"></textarea>
+        <div class="save-hint" id="reqHint">✓ 已自动保存</div>
+      </div>
+      <div id="pane-note" style="display:none">
+        <div class="tip">随堂记录、灵感、要点，均可添加到这里。</div>
+        <div class="input-row">
+          <textarea id="noteInput" placeholder="输入一条笔记…（Ctrl+Enter 快速添加）"></textarea>
+          <button class="add-btn" id="addNote">添加笔记</button>
+        </div>
+        <div class="item-list" id="noteList"></div>
+      </div>
+      <div id="pane-task" style="display:none">
+        <div class="tip">记录作业与截止时间，完成后勾选即可。</div>
+        <div class="input-row">
+          <textarea id="taskInput" placeholder="输入作业内容…（Ctrl+Enter 快速添加）"></textarea>
+          <input type="date" id="taskDue" max="2099-12-31">
+          <button class="add-btn" id="addTask">添加作业</button>
+        </div>
+        <div class="item-list" id="taskList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============ 课程数据 ============
+var ROWS = [
+  { key:"r12", label:"第 1–2 节", time:"08:00 – 09:40" },
+  { key:"r34", label:"第 3–4 节", time:"10:00 – 11:40" },
+  { key:"r56", label:"第 5–6 节", time:"13:00 – 14:40" },
+  { key:"r78", label:"第 7–8 节", time:"15:00 – 16:40" },
+  { key:"rev", label:"晚间",      time:"18:00 – 21:40" }
+];
+var DAYS = ["星期一","星期二","星期三","星期四","星期五"];
+
+var COURSES = [
+  { id:"eng",    cls:"c-eng",    name:"学术综合英语（硕士）", weeks:"1–8周",
+    teacher:"竹旭锋", room:"行511", phases:[1], credit:1, cat:"公共课",
+    slots:[ {day:1,row:"r56"} ] },
+  { id:"wri",    cls:"c-eng",    name:"学术英语写作与交流（硕士）", weeks:"待安排",
+    teacher:"陈鑫盛", room:"待安排", phases:[], credit:1, cat:"公共课",
+    slots:[] },
+  { id:"marx",   cls:"c-marx",   name:"马克思主义新闻观概要", weeks:"1–8周",
+    teacher:"周宇豪", room:"IV112", phases:[1], credit:1, cat:"专业基础课",
+    slots:[ {day:2,row:"r34"} ] },
+  { id:"policy", cls:"c-policy", name:"新闻传播政策、法规与伦理", weeks:"1–8周",
+    teacher:"徐根骅", room:"IV303", phases:[1], credit:2, cat:"专业基础课",
+    slots:[ {day:2,row:"rev",slotLabel:"第 9–12 节 ｜ 18:00 – 21:40"} ] },
+  { id:"ic",     cls:"c-ic",     name:"智能传播技术与应用", weeks:"1–8周",
+    teacher:"段秋婷", room:"IV103", phases:[1], credit:2, cat:"专业选修课",
+    slots:[ {day:3,row:"r12"}, {day:3,row:"r34"} ] },
+  { id:"ad",     cls:"c-ad",     name:"广告企业发展研究", weeks:"1–8周",
+    teacher:"孟令光", room:"IV407", phases:[1], credit:2, cat:"专业选修课",
+    slots:[ {day:3,row:"r56"}, {day:3,row:"r78"} ] },
+  { id:"nmad",   cls:"c-nmad",   name:"新媒体广告", weeks:"1–8周",
+    teacher:"杨海军", room:"IV208", phases:[1], credit:2, cat:"专业选修课",
+    slots:[ {day:4,row:"r56"}, {day:4,row:"r78"} ] },
+  { id:"mc",     cls:"c-mc",     name:"媒介技术与青年文化研究", weeks:"1–8周",
+    teacher:"钟怡", room:"行903", phases:[1], credit:2, cat:"专业选修课",
+    slots:[ {day:4,row:"r12"}, {day:4,row:"r34"} ] },
+  { id:"method", cls:"c-method", name:"新闻传播学研究方法", weeks:"1–16周",
+    teacher:"沈荟、陈鑫盛", room:"IV114", phases:[1,2], credit:3, cat:"专业基础课",
+    slots:[ {day:5,row:"r56"}, {day:5,row:"r78",slotLabel:"第 7 节 ｜ 15:00 – 15:45"} ] },
+  { id:"brand",  cls:"c-brand",  name:"品牌研究", weeks:"9–16周",
+    teacher:"孟令光", room:"IV109", phases:[2], credit:2, cat:"专业选修课",
+    slots:[ {day:1,row:"r12"}, {day:1,row:"r34"} ] },
+  { id:"ai",     cls:"c-ai",     name:"人工智能与广告", weeks:"9–16周",
+    teacher:"董新夏", room:"IV114", phases:[2], credit:2, cat:"专业选修课",
+    slots:[ {day:1,row:"r56"}, {day:1,row:"r78"} ] },
+  { id:"pe",     cls:"c-pe",     name:"公共体育（男女橄榄球）", weeks:"9–16周",
+    teacher:"朱侨宇", room:"A区北侧", phases:[2], credit:1, cat:"素质课",
+    slots:[ {day:2,row:"r56"} ] },
+  { id:"ct",     cls:"c-ct",     name:"传播理论基础", weeks:"9–16周",
+    teacher:"赵为学", room:"IV201", phases:[2], credit:2, cat:"专业基础课",
+    slots:[ {day:3,row:"r12"}, {day:3,row:"r34"} ] },
+  { id:"theory", cls:"c-theory", name:"新时代中国特色社会主义理论与实践", weeks:"9–16周",
+    teacher:"李大山", room:"IV301", phases:[2], credit:2, cat:"公共课",
+    slots:[ {day:5,row:"r12"}, {day:5,row:"r34"} ] },
+  { id:"dm",     cls:"c-dm",     name:"数字传媒创业", weeks:"9–16周",
+    teacher:"陶文静", room:"IV102", phases:[2], credit:1, cat:"素质课",
+    slots:[ {day:5,row:"rev",slotLabel:"第 11–12 节 ｜ 20:00 – 21:40"} ] }
+];
+
+// 现代色板（已去除紫色，统一在深色玻璃下可辨识）
+var CLS_COLOR = {
+  "c-eng":"#38bdf8","c-marx":"#f87171","c-policy":"#f472b6","c-ic":"#34d399",
+  "c-ad":"#fbbf24","c-nmad":"#fb7185","c-mc":"#2dd4bf","c-method":"#60a5fa",
+  "c-brand":"#a3e635","c-ai":"#f472b6","c-pe":"#22d3ee","c-ct":"#f59e0b",
+  "c-theory":"#818cf8","c-dm":"#fb923c"
+};
+function colorOf(c){ return CLS_COLOR[c.cls] || "#2dd4bf"; }
+// 根据课程主题色派生弹窗强调色（明暗自适应）
+function hexToRgb(h){ h=h.replace('#',''); if(h.length===3) h=h.split('').map(function(x){return x+x;}).join(''); return [parseInt(h.substr(0,2),16),parseInt(h.substr(2,2),16),parseInt(h.substr(4,2),16)]; }
+function shade(hex,p){ var c=hexToRgb(hex), t=p>0?255:0, a=Math.abs(p); return 'rgb('+[0,1,2].map(function(i){return Math.round((t-c[i])*a+c[i]);}).join(',')+')'; }
+function ccInk(cc){ var c=hexToRgb(cc); var l=(0.2126*c[0]+0.7152*c[1]+0.0722*c[2])/255; return l>0.62?'#1f2937':'#ffffff'; }
+
+// ============ 工具 ============
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+function courseById(id){ for(var i=0;i<COURSES.length;i++) if(COURSES[i].id===id) return COURSES[i]; return null; }
+function slotLabel(c,s){ if(s.slotLabel) return s.slotLabel; for(var i=0;i<ROWS.length;i++) if(ROWS[i].key===s.row) return ROWS[i].label+" ｜ "+ROWS[i].time; return ""; }
+function courseTime(c){ return c.slots.map(function(s){ return "周"+"一二三四五"[s.day-1]+" "+slotLabel(c,s); }).join("；"); }
+
+// ============ 主表格 ============
+var phase = 1;
+function setPhase(p){
+  phase = p;
+  $("tab1").className = "phase-tab"+(p===1?" active":"");
+  $("tab2").className = "phase-tab"+(p===2?" active":"");
+  renderGrid();
+}
+// ============ 学期周次：9.14 起为第 1 周，自动判断当前周 ============
+var TERM_START = new Date(2026, 8, 14);   // 2026-09-14（秋季学期第 1 周首日）
+var WEEK_MS = 7*24*3600*1000;
+function currentWeek(){
+  var diff = Math.floor((new Date() - TERM_START) / WEEK_MS);  // 0 → 第 1 周
+  var num = diff + 1, status = "", ph;
+  if(num < 1){ status = "未开学"; ph = 1; num = 1; }            // 开学前：预览第 1 周
+  else if(num > 16){ status = "已结课"; ph = 2; }               // 16 周后：停留在第 2 阶段
+  else { ph = num <= 8 ? 1 : 2; }                               // 1–8 周=阶段1，9–16 周=阶段2
+  return { num: num, phase: ph, status: status };
+}
+function applyWeek(wk){
+  phase = wk.phase;
+  $("tab1").className = "phase-tab"+(phase===1?" active":"");
+  $("tab2").className = "phase-tab"+(phase===2?" active":"");
+  var wt = $("weekTag"); if(wt) wt.textContent = "第 "+wk.num+" 周" + (wk.status ? "（"+wk.status+"）" : "");
+  renderGrid();
+}
+function cardHtml(c,s){
+  var cc = colorOf(c);
+  return "<div class='course' style='--cc:"+cc+"' data-cid='"+c.id+"'>"+
+    "<div class='name'>"+esc(c.name)+"</div>"+
+    "<div><span class='tag'>"+c.weeks+"</span><span class='tag'>"+c.credit+"学分</span></div>"+
+    "<div class='info'>"+esc(c.teacher)+" · "+esc(c.room)+"</div>"+
+    (s&&s.slotLabel?"<span class='slot'>"+s.slotLabel+"</span>":"")+
+    "</div>";
+}
+function renderGrid(){
+  var html = "<table class='grid'><thead><tr><th>节次 / 时间</th>";
+  for(var d=0;d<5;d++) html += "<th>"+DAYS[d]+"</th>";
+  html += "</tr></thead><tbody>";
+  ROWS.forEach(function(r){
+    html += "<tr><td class='period'><b>"+r.label+"</b><span>"+r.time+"</span></td>";
+    for(var d=1;d<=5;d++){
+      var found=null;
+      COURSES.forEach(function(c){
+        if(c.phases.indexOf(phase)===-1) return;
+        c.slots.forEach(function(s){ if(s.day===d && s.row===r.key) found={c:c,s:s}; });
+      });
+      html += found ? "<td class='cell'>"+cardHtml(found.c,found.s)+"</td>" : "<td class='cell'></td>";
+    }
+    html += "</tr>";
+  });
+  html += "</tbody></table>";
+  $("grid").innerHTML = html;
+  renderNow();
+  renderTaskReminder();
+  renderMobile();
+}
+
+// ============ 移动端：今天课表 + 进行中/即将 ============
+function toMin(t){ var p=t.split(":").map(Number); return p[0]*60+p[1]; }
+function parseRange(str){
+  var re=/\d{1,2}:\d{2}\s*[–\-]\s*\d{1,2}:\d{2}/g, m, last=null;
+  while((m=re.exec(str))!==null) last=m[0];
+  if(!last) return null;
+  var parts=last.split(/[–\-]/);
+  return [toMin(parts[0].trim()), toMin(parts[1].trim())];
+}
+function courseRanges(c){
+  var arr=[];
+  c.slots.forEach(function(s){
+    var src = s.slotLabel;
+    if(!src){ for(var i=0;i<ROWS.length;i++) if(ROWS[i].key===s.row) src=ROWS[i].label+" "+ROWS[i].time; }
+    var rng=parseRange(src); if(rng) arr.push(rng);
+  });
+  return arr;
+}
+function fmtRange(r){
+  if(!r) return "";
+  var p=function(m){ return (m<10?"0":"")+m; };
+  return p(Math.floor(r[0]/60))+":"+p(r[0]%60)+" – "+p(Math.floor(r[1]/60))+":"+p(r[1]%60);
+}
+// 当前正在上的区间；否则取最近将要开始的区间
+function activeRange(x,min){
+  var inside=x.ranges.filter(function(r){ return min>=r[0]&&min<=r[1]; });
+  if(inside.length) return inside[0];
+  var future=x.ranges.filter(function(r){ return r[0]>min; }).sort(function(a,b){ return a[0]-b[0]; });
+  return future[0]||x.ranges[0];
+}
+// ============ 进行中 / 即将上课（全平台：PC / iPad / 手机）============
+function renderNow(){
+  var nb=$("nowBox");
+  var wd=new Date().getDay(), now=new Date();
+  var min=now.getHours()*60+now.getMinutes();
+  var nowHtml="";
+  if(wd>=1 && wd<=5){
+    var todays=COURSES.filter(function(c){
+      return c.phases.indexOf(phase)>=0 && c.slots.some(function(s){ return s.day===wd; });
+    }).map(function(c){
+      var ranges=courseRanges(c);
+      var starts=ranges.map(function(r){return r[0];}).sort(function(a,b){return a-b;});
+      return {c:courseById(c.id), ranges:ranges, startMin:starts[0]};
+    });
+    var ongoing=todays.filter(function(x){ return x.ranges.some(function(r){ return min>=r[0]&&min<=r[1]; }); });
+    var upcoming=todays.filter(function(x){ return x.ranges.length && x.startMin>min && x.startMin<=min+240; })
+                       .sort(function(a,b){ return a.startMin-b.startMin; });
+    if(ongoing.length){
+      nowHtml+="<div class='now-card live'><div class='now-head'><span class='pulse'></span>正在上课</div>";
+      ongoing.forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min))); });
+      nowHtml+="</div>";
+    }
+    if(upcoming.length){
+      nowHtml+="<div class='now-card'><div class='now-head'><span class='clk'></span>即将开始 · 4 小时内</div>";
+      upcoming.slice(0,3).forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min))); });
+      nowHtml+="</div>";
+    }
+    // 没有正在上、也没有 4 小时内要上的课 —— 整个「即将开始」区块隐藏
+    if(!ongoing.length && !upcoming.length){ nb.style.display="none"; nb.innerHTML=""; return; }
+  } else {
+    // 周末无课 —— 也隐藏
+    nb.style.display="none"; nb.innerHTML=""; return;
+  }
+    nb.style.display="block";
+  nb.innerHTML=nowHtml;
+}
+// ============ 未完成作业提醒（课表上方，全平台）============
+function renderTaskReminder(){
+  var items=[];
+  COURSES.forEach(function(c){
+    getTasks(c.id).forEach(function(t){ if(!t.done) items.push({c:c,t:t}); });
+  });
+  items.sort(function(a,b){
+    var da=a.t.due||"9999-99-99", db=b.t.due||"9999-99-99";
+    return da<db?-1:(da>db?1:0);
+  });
+  var box=$("taskReminder");
+  if(!items.length){ box.style.display="none"; box.innerHTML=""; return; }
+  box.style.display="flex";
+  function itemHtml(it){
+    var od=it.t.due && new Date(it.t.due+"T23:59:59")<new Date();
+    return "<span class='tk-item' style='--cc:"+colorOf(it.c)+"'>"+
+      "<span class='cc-dot'></span><span class='tk-cls'>"+esc(it.c.name)+"</span> "+esc(it.t.text)+
+      (it.t.due?" <span class='tk-due"+(od?" overdue":"")+"'>"+(od?"逾期 ":"截止 ")+esc(it.t.due)+"</span>":"")+
+      "</span>";
+  }
+  var one=items.map(itemHtml).join("");
+  var track=one+one;                       // 复制一份，实现 -50% 无缝循环
+  var dur=Math.max(14, items.length*5);    // 条数越多滚动越久，速度恒定
+  box.innerHTML="<span class='tk-head'>📌 未完成作业 · 共 "+items.length+" 项</span>"+
+    "<span class='tk-view'><span class='tk-track' style='animation-duration:"+dur+"s'>"+track+"</span></span>";
+}
+// ============ 移动端：分天列表 ============
+function renderMobile(){
+  var wd=new Date().getDay();
+  var html="";
+  for(var d=1;d<=5;d++){
+    var isToday=(wd===d), body="";
+    ROWS.forEach(function(r){
+      var cards="";
+      COURSES.forEach(function(c){
+        if(c.phases.indexOf(phase)===-1) return;
+        c.slots.forEach(function(s){ if(s.day===d && s.row===r.key) cards+=cardHtml(c,s); });
+      });
+      if(cards) body+="<div class='m-slot'><div class='m-time'><b>"+r.label+"</b> "+r.time+"</div><div class='m-cards'>"+cards+"</div></div>";
+    });
+    if(!body) body="<div class='m-cards'><div class='empty'>无课</div></div>";
+    html+="<div class='day-block"+(isToday?" is-today":"")+"'>"+
+      "<div class='day-head'><b>"+DAYS[d-1]+"</b>"+(isToday?"<span class='today-badge'>今天</span>":"")+"</div>"+body+"</div>";
+  }
+  $("mlist").innerHTML=html;
+}
+// 展示格式：课程名（主） + 时间 ｜ 教室（副）
+function nowItem(c, timeStr){
+  var cc=colorOf(c);
+  return "<div class='now-item' style='--cc:"+cc+"'><div class='n'>"+esc(c.name)+"</div><div class='s'>"+(timeStr?esc(timeStr)+" ｜ ":"")+esc(c.room)+"</div></div>";
+}
+
+// ============ 课程详情（弹窗带动画）============
+function todayStr(){ var d=new Date(),p=function(n){return (n<10?"0":"")+n;}; return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function toast(msg){ var t=$("toast"); if(!t) return; t.textContent=msg; t.className="toast show"; clearTimeout(toast._t); toast._t=setTimeout(function(){ t.className="toast"; },2200); }
+var current=null;
+async function openCourse(id){
+  current=courseById(id); if(!current) return;
+  await ensureLoaded();
+  $("pName").textContent=current.name+"（"+current.weeks+"）";
+  var parts=[current.teacher,current.room,courseTime(current),current.credit+" 学分 · "+current.cat];
+  $("pMeta").textContent=parts.filter(function(x){return x;}).join(" ｜ ");
+  var cc=colorOf(current);
+  var ov=$("overlay");
+  ov.style.setProperty("--cc",cc);
+  ov.style.setProperty("--cc-ink",ccInk(cc));
+  $("panelHead").style.background=cc;
+  $("taskDue").value=todayStr();
+  $("reqText").value=LS_get("kb_req_"+current.id)||"";
+  renderNotes(); renderTasks(); switchTab("req");
+  $("overlay").className="overlay open";
+  try{ if(history.replaceState) history.replaceState(null,"","#course="+current.id); }catch(e){}
+}
+function closeCourse(){
+  $("overlay").className="overlay";
+  current=null;
+  try{ if(history.replaceState) history.replaceState(null,"",location.pathname+location.search); }catch(e){}
+}
+function switchTab(t){ ["req","note","task"].forEach(function(k){ $("pane-"+k).style.display=(k===t)?"block":"none"; $("tabbtn-"+k).className="tab-btn"+(k===t?" active":""); }); }
+
+// ===== 存储层：本地兜底 + 服务端同步（双层，刷新不丢、多端共享）=====
+var PWD = new URLSearchParams(location.search).get("pwd") || "";
+// 后端基地址：同源部署（如网页版也放云托管）留空 "" 即可；
+// 若网页版托管在别处、需跨域调用云托管，填其公网域名，例如：
+//   var API_BASE = "https://flask-6zv2-314248-5-1488691057.sh.run.tcloudbase.com";
+var API_BASE = "";
+var STORE = {};          // 内存缓存
+var _loaded = false;
+var _LSP = "kbstore_";   // localStorage 键前缀，避免与本机其它站点冲突
+function _lsk(k){ return _LSP + k; }
+function _lset(k,v){ try{ localStorage.setItem(_lsk(k), v); }catch(e){} }
+function apiUrl(p){ return API_BASE + p + (p.indexOf("?")>=0?"&":"?") + "pwd=" + encodeURIComponent(PWD); }
+// 启动：先用 localStorage 填充（保证刷新不丢），带口令时再用服务端数据覆盖（多端同步优先）
+function ensureLoaded(){
+  try{
+    for(var i=0;i<localStorage.length;i++){
+      var key=localStorage.key(i);
+      if(key && key.indexOf(_LSP)===0) STORE[key.slice(_LSP.length)] = localStorage.getItem(key);
+    }
+  }catch(e){}
+  if(PWD){
+    return fetch(apiUrl("/api/all")).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ if(d && typeof d==="object"){ for(var k in d) STORE[k]=d[k]; } _loaded=true; return STORE; })
+      .catch(function(){ _loaded=true; return STORE; });
+  }
+  _loaded=true;
+  return Promise.resolve(STORE);
+}
+// 读取：内存优先（内存已含 localStorage 初始值）
+function LS_get(k){ return (k in STORE) ? STORE[k] : null; }
+// 写入：立刻落 localStorage（刷新不丢），带口令时再异步同步到服务端
+function LS_set(k,v){
+  STORE[k]=v;
+  _lset(k, v);
+  if(PWD){
+    fetch(apiUrl("/api/set"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k,value:v,pwd:PWD})}).catch(function(){});
+  }
+}
+function lsKey(id,kind){ return "kb_"+kind+"_"+id; }
+function readData(id,kind){
+  var raw=LS_get(lsKey(id,kind));
+  if(kind==="req") return raw||"";
+  try{ return JSON.parse(raw)||[]; }catch(e){ return []; }
+}
+function saveData(id,kind,val){ LS_set(lsKey(id,kind), kind==="req"?val:JSON.stringify(val)); }
+
+var hintTimer=null;
+$("reqText").addEventListener("input",function(){ if(!current) return; saveData(current.id,"req",this.value); $("reqHint").className="save-hint show"; clearTimeout(hintTimer); hintTimer=setTimeout(function(){ $("reqHint").className="save-hint"; },1500); });
+
+function getNotes(id){ try{ return JSON.parse(LS_get("kb_notes_"+id))||[]; }catch(e){ return []; } }
+function renderNotes(){
+  var list=getNotes(current.id), html="";
+  if(!list.length){ $("noteList").innerHTML="<div class='empty'>还没有笔记，添加第一条吧～</div>"; return; }
+  list.forEach(function(n,i){ html+="<div class='item'><div class='txt'>"+esc(n.text)+"<span class='time'>"+esc(n.time)+"</span></div><button class='del del-note' data-idx='"+i+"'>删除</button></div>"; });
+  $("noteList").innerHTML=html;
+}
+function addNote(){ var v=$("noteInput").value.trim(); if(!v||!current) return; var list=getNotes(current.id); list.unshift({text:v,time:new Date().toLocaleString("zh-CN",{hour12:false})}); saveData(current.id,"notes",list); $("noteInput").value=""; renderNotes(); }
+function delNote(i){ var list=getNotes(current.id); list.splice(i,1); saveData(current.id,"notes",list); renderNotes(); }
+
+function getTasks(id){ return readData(id,"tasks"); }
+function renderTasks(){
+  var list=getTasks(current.id), html="";
+  if(!list.length){ $("taskList").innerHTML="<div class='empty'>暂无作业记录，添加第一条吧～</div>"; return; }
+  list.forEach(function(t,i){
+    var dueHtml="";
+    if(t.due){ var od=false; if(!t.done && new Date(t.due+"T23:59:59")<new Date()) od=true; dueHtml="<span class='due"+(od?" overdue":"")+"'>"+(od?"已逾期 · ":"截止 ")+t.due+"</span>"; }
+    html+="<div class='item"+(t.done?" done":"")+"'><input type='checkbox' class='check-task' data-idx='"+i+"' "+(t.done?"checked":"")+"><div class='txt'>"+esc(t.text)+dueHtml+"<span class='time'>添加于 "+esc(t.time)+"</span></div><button class='del del-task' data-idx='"+i+"'>删除</button></div>";
+  });
+  $("taskList").innerHTML=html;
+}
+function addTask(){ var v=$("taskInput").value.trim(); if(!v||!current) return; var due=$("taskDue").value||""; if(due && !/^\d{4}-\d{2}-\d{2}$/.test(due)){ toast("日期格式有误，请重新选择截止日期"); return; } var list=getTasks(current.id); list.unshift({text:v,due:due,done:false,time:new Date().toLocaleString("zh-CN",{hour12:false})}); saveData(current.id,"tasks",list); $("taskInput").value=""; $("taskDue").value=""; renderTasks(); renderTaskReminder(); }
+function toggleTask(i){ var list=getTasks(current.id); list[i].done=!list[i].done; saveData(current.id,"tasks",list); renderTasks(); renderTaskReminder(); }
+function delTask(i){ var list=getTasks(current.id); list.splice(i,1); saveData(current.id,"tasks",list); renderTasks(); renderTaskReminder(); }
+
+// ============ 学分统计 ============
+var TOTAL_MIN=37;
+var REQS=[
+  {cat:"公共课",need:5,min:3,note:"要求 5 或 3 学分（外国语免修时为 3）：思想政治 3＋公共外国语 2"},
+  {cat:"素质课",need:5,min:5,note:"要求 5 学分：人工智能 2＋公共体育 1＋创新创业 1＋学术规范与写作 1"},
+  {cat:"专业基础课",need:12,min:10,note:"至少 10 或 12 学分"},
+  {cat:"专业选修课",need:12,min:12,note:"至少 12 学分"},
+  {cat:"专业实践课程",need:4,min:4,note:"4 学分"},
+  {cat:"学术与技术交流",need:1,min:1,note:"1 学分"}
+];
+function renderCredits(){
+  var total=0; COURSES.forEach(function(c){ total+=c.credit; });
+  $("totalBar").style.width=Math.min(100,total/TOTAL_MIN*100)+"%";
+  $("totalTxt").textContent="已选 "+total+" / 最低 "+TOTAL_MIN+" 学分";
+  var html="";
+  REQS.forEach(function(r){
+    var cs=COURSES.filter(function(c){return c.cat===r.cat;}), got=0;
+    cs.forEach(function(c){ got+=c.credit; });
+    var pct=Math.min(100,got/r.need*100);
+    var numCls=got>=r.need?"ok":(got>=r.min?"half":"lack");
+    var gap=got<r.min?" · 还差 "+(r.min-got)+" 学分达最低要求":(got<r.need?" · 已满足最低要求":" · 已达标");
+    var chips=cs.map(function(c){ return "<span class='chip' data-cid='"+c.id+"'>"+esc(c.name)+" "+c.credit+"学分</span>"; }).join("");
+    if(!cs.length) chips="<span class='miss'>尚未选课</span>";
+    html+="<div class='cat-card'>"+
+      "<div class='cat-top'><b>"+r.cat+"</b><span class='num "+numCls+"'>"+got+" / "+r.need+"</span></div>"+
+      "<div class='bar'><i style='width:"+pct+"%"+(got>=r.need?";background:#34d399":(got>=r.min?";background:#fbbf24":""))+"'></i></div>"+
+      "<div class='chips'>"+chips+"</div>"+
+      "<div class='cat-note'>"+r.note+gap+"</div></div>";
+  });
+  $("catGrid").innerHTML=html;
+}
+
+// ============ 快捷键 & 深链 ============
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape") closeCourse();
+  if(e.ctrlKey&&e.key==="Enter"){ if(!$("pane-note").style.display||$("pane-note").style.display==="block") addNote(); else if($("pane-task").style.display==="block") addTask(); }
+});
+$("overlay").addEventListener("click",function(e){ if(e.target===this) closeCourse(); });
+
+// 静态按钮直接绑定（不再依赖 inline onclick）
+$("tab1").addEventListener("click", function(){ setPhase(1); });
+$("tab2").addEventListener("click", function(){ setPhase(2); });
+$("closeX").addEventListener("click", closeCourse);
+$("addNote").addEventListener("click", addNote);
+$("addTask").addEventListener("click", addTask);
+
+// 动态元素使用事件委托：课程卡片、学分标签、删除按钮、Tab 切换
+document.addEventListener("click", function(e){
+  var el = e.target, card = null, del = null, tab = null;
+  if(el.closest){
+    card = el.closest("[data-cid]");
+    del  = el.closest(".del-note") || el.closest(".del-task");
+    tab  = el.closest("[data-tab]");
+  }
+  if(card && (card.classList.contains("course") || card.classList.contains("chip"))){
+    e.stopPropagation();
+    openCourse(card.dataset.cid);
+    return;
+  }
+  if(del){
+    var idx = parseInt(del.dataset.idx,10);
+    if(del.classList.contains("del-note")) delNote(idx);
+    else delTask(idx);
+    return;
+  }
+  if(tab){ switchTab(tab.dataset.tab); }
+});
+document.addEventListener("change", function(e){
+  var cb = e.target.closest ? e.target.closest(".check-task") : null;
+  if(cb) toggleTask(parseInt(cb.dataset.idx,10));
+});
+
+function boot(){
+  if(PWD){
+    ensureLoaded().then(function(){
+      applyWeek(currentWeek()); renderCredits();   // 自动判断当前周并渲染对应课表
+      var m=location.hash.match(/#course=([a-z]+)/); if(m&&courseById(m[1])) openCourse(m[1]);
+    });
+  } else {
+    document.getElementById("pwMask").style.display="flex";
+  }
+}
+boot();
+// 每分钟刷新提醒；若跨周则自动切换阶段并重渲染课表
+setInterval(function(){
+  var wk=currentWeek();
+  if(wk.phase!==phase){ applyWeek(wk); }          // 跨入新的一周 → 自动换课表
+  else { renderNow(); renderTaskReminder(); }
+}, 60000);
+document.getElementById("pwBtn").addEventListener("click", function(){
+  var v=document.getElementById("pwInput").value.trim();
+  if(!v){ document.getElementById("pwErr").textContent="请输入口令"; return; }
+  location.href=location.pathname+"?pwd="+encodeURIComponent(v);
+});
+document.getElementById("pwInput").addEventListener("keydown", function(e){ if(e.key==="Enter") document.getElementById("pwBtn").click(); });
+</script>
+</body>
+</html>
