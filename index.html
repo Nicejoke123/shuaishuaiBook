@@ -123,6 +123,16 @@
   .custom-card .cc-info{font-size:11.5px;color:var(--mut);margin-top:4px}
   .custom-empty{font-size:12.5px;color:var(--mut);padding:8px 2px}
 
+  /* 随笔记（与小程序同步 kb_notes_free） */
+  .free-sec{margin-top:26px}
+  .free-sec .credit-head{margin-bottom:14px}
+  .free-count{font-size:13px;font-weight:600;color:var(--mut)}
+  .free-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  .free-card{background:rgba(255,255,255,.55);border:1px solid var(--bd);border-left:3px solid #2dd4bf;
+    border-radius:14px;padding:12px 14px;animation:slideIn .25s ease}
+  .free-card .ft{font-size:13.5px;color:var(--ink);line-height:1.6;word-break:break-word}
+  .free-card .fm{font-size:11px;color:var(--mut);margin-top:8px}
+
   /* 未完成作业提醒：走字屏（横幅自动横向滚动，纯提醒无交互） */
   .task-ticker{display:none;align-items:center;gap:12px;overflow:hidden;background:linear-gradient(135deg,rgba(251,191,36,.16),rgba(248,113,113,.14));border:1px solid rgba(234,179,8,.45);border-radius:14px;padding:10px 14px;backdrop-filter:blur(14px);margin-bottom:18px}
   .task-ticker .tk-head{flex-shrink:0;font-size:13px;font-weight:700;color:#b45309;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
@@ -323,6 +333,14 @@
     <div class="mobile-list" id="mlist"></div>
   </div>
 
+  <div class="credit-sec free-sec" id="freeSec" style="display:none">
+    <div class="credit-head">
+      <h3>📝 随笔记</h3>
+      <span class="free-count" id="freeCount"></span>
+    </div>
+    <div class="free-grid" id="freeGrid"></div>
+  </div>
+
   <div class="credit-sec">
     <div class="credit-head">
       <h3>学分统计（本学期已选课程）</h3>
@@ -519,6 +537,7 @@ function renderGrid(){
   $("grid").innerHTML = html;
   renderNow();
   renderCustom();
+  renderFreeNotes();
   renderTaskReminder();
   renderMobile();
 }
@@ -553,7 +572,7 @@ function activeRange(x,min){
   var future=x.ranges.filter(function(r){ return r[0]>min; }).sort(function(a,b){ return a[0]-b[0]; });
   return future[0]||x.ranges[0];
 }
-// ============ 进行中 / 即将上课（全平台：PC / iPad / 手机）============
+// ============ 即将上课（1 小时内；「正在上课」已按需求取消）============
 function renderNow(){
   var nb=$("nowBox");
   var wd=new Date().getDay(), now=new Date();
@@ -564,27 +583,20 @@ function renderNow(){
       return c.phases.indexOf(phase)>=0 && c.slots.some(function(s){ return s.day===wd; });
     }).map(function(c){
       var ranges=courseRanges(c);
-      // 与小程序一致：取「最近将要开始」的节次（而非第一节），多节次课程后半段也能提示
+      // 取「最近将要开始」的节次（而非第一节），多节次课程后半段也能提示
       var nextStart=null;
       ranges.forEach(function(r){ if(r[0]>min && (nextStart===null||r[0]<nextStart)) nextStart=r[0]; });
       return {c:courseById(c.id), ranges:ranges, startMin:nextStart};
     });
-    var ongoing=todays.filter(function(x){ return x.ranges.some(function(r){ return min>=r[0]&&min<=r[1]; }); });
     var upcoming=todays.filter(function(x){ return x.startMin!==null && x.startMin<=min+60; })
                        .sort(function(a,b){ return a.startMin-b.startMin; });
-    if(ongoing.length){
-      nowHtml+="<div class='now-row'><span class='now-tag live'><span class='pulse'></span>正在上课</span><div class='now-cards'>";
-      ongoing.forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min)), true); });
-      nowHtml+="</div></div>";
-    }
-    // 有「正在上课」时不显示「即将开始」——与小程序端一致
-    if(!ongoing.length && upcoming.length){
+    if(upcoming.length){
       nowHtml+="<div class='now-row'><span class='now-tag ghost'><span class='clk'></span>即将 · 1 小时内</span><div class='now-cards'>";
       upcoming.slice(0,3).forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min)), false); });
       nowHtml+="</div></div>";
     }
-    // 没有正在上、也没有 1 小时内要上的课 —— 整个「即将开始」区块隐藏
-    if(!ongoing.length && !upcoming.length){ nb.style.display="none"; nb.innerHTML=""; return; }
+    // 1 小时内没有要上的课 —— 整个区块隐藏
+    if(!upcoming.length){ nb.style.display="none"; nb.innerHTML=""; return; }
   } else {
     // 周末无课 —— 也隐藏
     nb.style.display="none"; nb.innerHTML=""; return;
@@ -697,6 +709,23 @@ function renderCustom(){
   html+="</div>";
   box.style.display="block";
   box.innerHTML=html;
+}
+
+// ============ 随笔记（小程序端添加，云端同步 kb_notes_free）============
+function renderFreeNotes(){
+  var sec=$("freeSec"); if(!sec) return;
+  var list=[];
+  try{ list=JSON.parse(LS_get("kb_notes_free")||"[]")||[]; }catch(e){ list=[]; }
+  if(!list.length){ sec.style.display="none"; sec.innerHTML=""; return; }
+  $("freeCount").textContent="共 "+list.length+" 条 · 来自小程序";
+  var html="";
+  list.forEach(function(n){
+    html+="<div class='free-card'><div class='ft'>"+esc(n.text||"")+"</div>"
+      +(n.time?"<div class='fm'>"+esc(n.time)+"</div>":"")
+      +"</div>";
+  });
+  $("freeGrid").innerHTML=html;
+  sec.style.display="block";
 }
 
 // ============ 课程详情（弹窗带动画）============
@@ -888,7 +917,7 @@ boot();
 setInterval(function(){
   var wk=currentWeek();
   if(wk.phase!==phase){ applyWeek(wk); }          // 跨入新的一周 → 自动换课表
-  else { renderNow(); renderCustom(); renderTaskReminder(); }
+  else { renderNow(); renderCustom(); renderFreeNotes(); renderTaskReminder(); }
 }, 60000);
 document.getElementById("pwBtn").addEventListener("click", function(){
   var v=document.getElementById("pwInput").value.trim();
