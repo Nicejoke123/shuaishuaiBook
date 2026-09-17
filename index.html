@@ -80,20 +80,27 @@
   .course .info{font-size:11.5px;color:var(--mut)}
   .course .slot{font-size:10.5px;color:color-mix(in srgb,var(--cc) 55%,#0f172a);margin-top:auto;font-weight:600}
 
-  /* 移动列表 + 进行中/即将 */
+  /* 移动列表 + 进行中/即将（与课表同款卡片，紧凑行式排版） */
   .mobile-list{display:none}
-  .now-box{display:grid;gap:12px;margin-bottom:18px}
-  .now-card{background:var(--glass);border:1px solid var(--bd);border-radius:16px;padding:14px 16px;backdrop-filter:blur(14px);position:relative;overflow:hidden}
-  .now-card.live{border-color:rgba(52,211,153,.5);box-shadow:0 0 0 1px rgba(52,211,153,.25)}
-  .now-head{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--mut);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}
-  .now-head .pulse{width:9px;height:9px;border-radius:50%;background:#34d399;box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:pulse 1.6s infinite}
-  .now-head .clk{width:9px;height:9px;border-radius:50%;background:var(--brand)}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}70%{box-shadow:0 0 0 9px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
-  .now-item{border-left:3px solid var(--cc);background:color-mix(in srgb,var(--cc) 12%,transparent);border-radius:12px;padding:10px 13px;margin-top:8px}
-  .now-item:first-of-type{margin-top:0}
-  .now-item .n{font-size:14px;font-weight:700}
-  .now-item .s{font-size:12px;color:var(--mut);margin-top:2px}
-  .now-empty{font-size:13px;color:var(--mut);padding:6px 2px}
+  .now-box{display:grid;gap:10px;margin-bottom:14px}
+  .now-row{display:flex;gap:12px;align-items:stretch}
+  .now-tag{flex-shrink:0;align-self:flex-start;display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;padding:6px 14px;border-radius:999px;margin-top:3px;white-space:nowrap}
+  .now-tag.live{background:linear-gradient(120deg,#34d399,#2dd4bf);color:#04141a;box-shadow:0 8px 18px -10px rgba(52,211,153,.8)}
+  .now-tag.ghost{background:var(--glass);border:1px solid var(--bd);color:var(--mut)}
+  .now-tag .pulse{width:8px;height:8px;border-radius:50%;background:#04141a;animation:pulse 1.6s infinite}
+  .now-tag .clk{width:8px;height:8px;border-radius:50%;background:var(--brand)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(4,20,26,.45)}70%{box-shadow:0 0 0 8px rgba(4,20,26,0)}100%{box-shadow:0 0 0 0 rgba(4,20,26,0)}}
+  .now-cards{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:11px;align-content:start}
+  .now-course{height:auto;padding:9px 12px}
+  .now-course .name .n-teacher{font-size:11px;font-weight:500;color:var(--mut);margin-left:7px}
+  .now-course .slot{margin-top:3px}
+  .now-course.live-card{box-shadow:0 0 0 1px rgba(52,211,153,.45),0 10px 24px -16px rgba(52,211,153,.55)}
+  @media (max-width:767px){
+    .now-row{flex-direction:column;gap:8px}
+    .now-tag{margin-top:0}
+    .now-cards{grid-template-columns:1fr 1fr}
+    .now-course .name{font-size:12px}
+  }
 
   /* 自定义日程（来自小程序，云端同步） */
   .custom-sec{margin-bottom:18px}
@@ -557,23 +564,26 @@ function renderNow(){
       return c.phases.indexOf(phase)>=0 && c.slots.some(function(s){ return s.day===wd; });
     }).map(function(c){
       var ranges=courseRanges(c);
-      var starts=ranges.map(function(r){return r[0];}).sort(function(a,b){return a-b;});
-      return {c:courseById(c.id), ranges:ranges, startMin:starts[0]};
+      // 与小程序一致：取「最近将要开始」的节次（而非第一节），多节次课程后半段也能提示
+      var nextStart=null;
+      ranges.forEach(function(r){ if(r[0]>min && (nextStart===null||r[0]<nextStart)) nextStart=r[0]; });
+      return {c:courseById(c.id), ranges:ranges, startMin:nextStart};
     });
     var ongoing=todays.filter(function(x){ return x.ranges.some(function(r){ return min>=r[0]&&min<=r[1]; }); });
-    var upcoming=todays.filter(function(x){ return x.ranges.length && x.startMin>min && x.startMin<=min+240; })
+    var upcoming=todays.filter(function(x){ return x.startMin!==null && x.startMin<=min+60; })
                        .sort(function(a,b){ return a.startMin-b.startMin; });
     if(ongoing.length){
-      nowHtml+="<div class='now-card live'><div class='now-head'><span class='pulse'></span>正在上课</div>";
-      ongoing.forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min))); });
-      nowHtml+="</div>";
+      nowHtml+="<div class='now-row'><span class='now-tag live'><span class='pulse'></span>正在上课</span><div class='now-cards'>";
+      ongoing.forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min)), true); });
+      nowHtml+="</div></div>";
     }
-    if(upcoming.length){
-      nowHtml+="<div class='now-card'><div class='now-head'><span class='clk'></span>即将开始 · 4 小时内</div>";
-      upcoming.slice(0,3).forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min))); });
-      nowHtml+="</div>";
+    // 有「正在上课」时不显示「即将开始」——与小程序端一致
+    if(!ongoing.length && upcoming.length){
+      nowHtml+="<div class='now-row'><span class='now-tag ghost'><span class='clk'></span>即将 · 1 小时内</span><div class='now-cards'>";
+      upcoming.slice(0,3).forEach(function(x){ nowHtml+=nowItem(x.c, fmtRange(activeRange(x,min)), false); });
+      nowHtml+="</div></div>";
     }
-    // 没有正在上、也没有 4 小时内要上的课 —— 整个「即将开始」区块隐藏
+    // 没有正在上、也没有 1 小时内要上的课 —— 整个「即将开始」区块隐藏
     if(!ongoing.length && !upcoming.length){ nb.style.display="none"; nb.innerHTML=""; return; }
   } else {
     // 周末无课 —— 也隐藏
@@ -628,10 +638,13 @@ function renderMobile(){
   }
   $("mlist").innerHTML=html;
 }
-// 展示格式：课程名（主） + 时间 ｜ 教室（副）
-function nowItem(c, timeStr){
-  var cc=colorOf(c);
-  return "<div class='now-item' style='--cc:"+cc+"'><div class='n'>"+esc(c.name)+"</div><div class='s'>"+(timeStr?esc(timeStr)+" ｜ ":"")+esc(c.room)+"</div></div>";
+// 展示格式：课表同款卡片（课程名 + 教师同行，时间｜教室 一行）
+function nowItem(c, timeStr, live){
+  var cc = colorOf(c);
+  return "<div class='course now-course"+(live?" live-card":"")+"' style='--cc:"+cc+"' data-cid='"+c.id+"'>"+
+    "<div class='name'>"+esc(c.name)+"<span class='n-teacher'>"+esc(c.teacher)+"</span></div>"+
+    "<div class='slot'>"+(timeStr?esc(timeStr)+" ｜ ":"")+esc(c.room)+"</div>"+
+    "</div>";
 }
 
 // ============ 自定义日程（小程序端添加，云端同步 kb_custom）============
