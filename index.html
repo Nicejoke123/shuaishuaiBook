@@ -95,6 +95,27 @@
   .now-item .s{font-size:12px;color:var(--mut);margin-top:2px}
   .now-empty{font-size:13px;color:var(--mut);padding:6px 2px}
 
+  /* 自定义日程（来自小程序，云端同步） */
+  .custom-sec{margin-bottom:18px}
+  .custom-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--mut);margin-bottom:10px}
+  .custom-head .cs-ic{font-size:15px}
+  .custom-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+  .custom-card{
+    border-radius:15px;padding:12px 14px;cursor:pointer;
+    background:color-mix(in srgb,var(--cc) 15%, var(--glass));
+    border:1px solid color-mix(in srgb,var(--cc) 32%, transparent);
+    border-left:3px solid var(--cc);
+    transition:transform .2s,box-shadow .2s,background .2s;color:var(--ink);
+  }
+  .custom-card:hover{transform:translateY(-3px);box-shadow:0 14px 30px -14px color-mix(in srgb,var(--cc) 55%,transparent);background:color-mix(in srgb,var(--cc) 24%,var(--glass))}
+  .custom-card .cc-date{font-size:11.5px;font-weight:700;color:color-mix(in srgb,var(--cc) 55%,#0f172a);display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .custom-card .cc-date .dot{width:7px;height:7px;border-radius:50%;background:var(--cc);flex-shrink:0}
+  .custom-card .cc-date .today-pill{background:var(--grad);color:#04141a;font-size:10px;padding:1px 8px;border-radius:20px}
+  .custom-card .cc-date .done-pill{background:rgba(15,23,42,.10);color:var(--mut);font-size:10px;padding:1px 8px;border-radius:20px}
+  .custom-card .cc-name{font-size:14px;font-weight:700;line-height:1.35}
+  .custom-card .cc-info{font-size:11.5px;color:var(--mut);margin-top:4px}
+  .custom-empty{font-size:12.5px;color:var(--mut);padding:8px 2px}
+
   /* 未完成作业提醒：走字屏（横幅自动横向滚动，纯提醒无交互） */
   .task-ticker{display:none;align-items:center;gap:12px;overflow:hidden;background:linear-gradient(135deg,rgba(251,191,36,.16),rgba(248,113,113,.14));border:1px solid rgba(234,179,8,.45);border-radius:14px;padding:10px 14px;backdrop-filter:blur(14px);margin-bottom:18px}
   .task-ticker .tk-head{flex-shrink:0;font-size:13px;font-weight:700;color:#b45309;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
@@ -289,6 +310,7 @@
 
   <div class="board">
     <div class="now-box" id="nowBox"></div>
+    <div class="custom-sec" id="customSec" style="display:none"></div>
     <div class="task-ticker" id="taskReminder"></div>
     <div class="grid-wrap" id="grid"></div>
     <div class="mobile-list" id="mlist"></div>
@@ -489,6 +511,7 @@ function renderGrid(){
   html += "</tbody></table>";
   $("grid").innerHTML = html;
   renderNow();
+  renderCustom();
   renderTaskReminder();
   renderMobile();
 }
@@ -609,6 +632,58 @@ function renderMobile(){
 function nowItem(c, timeStr){
   var cc=colorOf(c);
   return "<div class='now-item' style='--cc:"+cc+"'><div class='n'>"+esc(c.name)+"</div><div class='s'>"+(timeStr?esc(timeStr)+" ｜ ":"")+esc(c.room)+"</div></div>";
+}
+
+// ============ 自定义日程（小程序端添加，云端同步 kb_custom）============
+var WEEK_CN=["日","一","二","三","四","五","六"];
+function fmtDateCN(ds){ var p=ds.split("-").map(Number); return p[1]+"月"+p[2]+"日 · 周"+WEEK_CN[new Date(p[0],p[1]-1,p[2]).getDay()]; }
+function normCustomList(raw){
+  var today=todayStr(), out=[];
+  (raw||[]).forEach(function(e){
+    if(!e || !e.title) return;
+    var d=e.date;
+    // 兼容小程序旧版「每周重复」数据（days 数组）→ 取今天或之后最近的一天
+    if(!d && e.days && e.days.length){
+      var pp=function(n){ return (n<10?"0":"")+n; };
+      for(var i=0;i<7 && !d;i++){
+        var t=new Date(); t.setDate(t.getDate()+i);
+        var wd=t.getDay()===0?7:t.getDay();
+        if(e.days.indexOf(wd)>=0) d=t.getFullYear()+"-"+pp(t.getMonth()+1)+"-"+pp(t.getDate());
+      }
+      if(!d) return;
+    }
+    if(!d || d < today) return; // 无日期或已过期
+    var cc=/^#[0-9a-fA-F]{6}$/.test(e.color||"") ? e.color : "#3f9bdc";
+    out.push({title:e.title, date:d, start:e.start||"", end:e.end||"", room:e.room||"", color:cc});
+  });
+  out.sort(function(a,b){ return (a.date+a.start)<(b.date+b.start)?-1:1; });
+  return out;
+}
+function renderCustom(){
+  var box=$("customSec"); if(!box) return;
+  var list=[];
+  try{ list=normCustomList(JSON.parse(LS_get("kb_custom")||"[]")); }catch(e){ list=[]; }
+  if(!list.length){ box.style.display="none"; box.innerHTML=""; return; }
+  var today=todayStr(), nowMin=new Date().getHours()*60+new Date().getMinutes();
+  var html="<div class='custom-head'><span class='cs-ic'>📌</span>自定义日程 · 共 "+list.length+" 项（与小程序同步）</div><div class='custom-grid'>";
+  list.forEach(function(ev){
+    var isToday=ev.date===today, over=false, livePill="";
+    if(isToday && ev.start && ev.end){
+      var s=toMin(ev.start), en=toMin(ev.end);
+      if(nowMin>=s && nowMin<=en) livePill="<span class='today-pill' style='background:linear-gradient(120deg,#34d399,#2dd4bf)'>进行中</span>";
+      else if(en<nowMin) over=true;
+    }
+    html+="<div class='custom-card' style='--cc:"+ev.color+"'>"+
+      "<div class='cc-date'><span class='dot'></span>"+fmtDateCN(ev.date)+
+      (isToday?(over?"<span class='done-pill'>已结束</span>":livePill||"<span class='today-pill'>今天</span>"):"")+
+      "</div>"+
+      "<div class='cc-name'>"+esc(ev.title)+"</div>"+
+      "<div class='cc-info'>"+(ev.start?esc(ev.start)+" – "+esc(ev.end)+" ｜ ":"")+(ev.room?esc(ev.room):"自定义安排")+"</div>"+
+      "</div>";
+  });
+  html+="</div>";
+  box.style.display="block";
+  box.innerHTML=html;
 }
 
 // ============ 课程详情（弹窗带动画）============
@@ -800,7 +875,7 @@ boot();
 setInterval(function(){
   var wk=currentWeek();
   if(wk.phase!==phase){ applyWeek(wk); }          // 跨入新的一周 → 自动换课表
-  else { renderNow(); renderTaskReminder(); }
+  else { renderNow(); renderCustom(); renderTaskReminder(); }
 }, 60000);
 document.getElementById("pwBtn").addEventListener("click", function(){
   var v=document.getElementById("pwInput").value.trim();
