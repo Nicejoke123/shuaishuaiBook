@@ -45,6 +45,12 @@
   .ttl{display:flex;flex-direction:column;gap:6px;min-width:0}
   .ttl h1{font-size:27px;font-weight:800;letter-spacing:.3px;display:flex;align-items:center;gap:10px}
   .ttl h1 .dot{width:11px;height:11px;border-radius:50%;background:#34d399;box-shadow:0 0 0 4px rgba(52,211,153,.25)}
+  /* 云端同步状态点：绿=已连上云端 / 黄=同步中 / 红=未连上（与小程序一致，点击看详情） */
+  .ttl h1 .sync-dot{width:12px;height:12px;border-radius:50%;margin-left:2px;cursor:pointer;transition:background .3s;box-shadow:0 0 0 4px rgba(148,163,184,.18)}
+  .ttl h1 .sync-dot.online{background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.18),0 0 10px rgba(34,197,94,.8)}
+  .ttl h1 .sync-dot.syncing{background:#f59e0b;animation:syncPulse 1s ease-in-out infinite}
+  .ttl h1 .sync-dot.offline{background:#f87171;box-shadow:0 0 0 4px rgba(248,113,113,.18)}
+  @keyframes syncPulse{0%,100%{opacity:1}50%{opacity:.35}}
   .meta{font-size:13px;color:var(--mut)}
   .week-tag{display:inline-block;margin-left:8px;padding:2px 10px;border-radius:999px;font-weight:700;color:#04141a;background:var(--grad);box-shadow:0 4px 14px -6px rgba(45,212,191,.6)}
   .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -312,7 +318,7 @@
   </svg>
   <div class="wrap">
     <div class="ttl">
-      <h1><span class="dot"></span>甩甩生涯助手</h1>
+      <h1><span class="dot"></span>甩甩生涯助手<span class="sync-dot syncing" id="syncDot" title="点击查看云端同步状态"></span></h1>
       <div class="meta">冉云杰 ｜ 学号 26725101 ｜ 新闻传播学院 ｜ 2026–2027 学年 秋季学期 <span id="weekTag" class="week-tag"></span></div>
     </div>
     <div class="toolbar">
@@ -1139,9 +1145,29 @@ var _cosSync=null;
 function cosSaveAll(){   // 全量防抖写回（几 KB，500ms 合并一次）
   clearTimeout(_cosSync);
   _cosSync=setTimeout(function(){
-    cosFetch("PUT", COS_DATA_KEY, JSON.stringify(STORE)).catch(function(){});
+    setSyncState("syncing");
+    cosFetch("PUT", COS_DATA_KEY, JSON.stringify(STORE)).then(function(r){
+      if(r.ok) setSyncState("online"); else setSyncState("offline");
+    }).catch(function(){ setSyncState("offline"); });
   }, 500);
 }
+// ---- 云端同步状态点（与小程序同款：绿=已连上 / 黄=同步中 / 红=未连上）----
+var _syncState="syncing", _syncTs=0;
+function setSyncState(st, ts){
+  _syncState=st; if(ts) _syncTs=ts;
+  var dot=document.getElementById("syncDot");
+  if(dot) dot.className="sync-dot "+st;
+}
+function syncStateText(){
+  var p=function(n){ return (n<10?"0":"")+n; };
+  if(_syncState==="online") return "已连上云端" + (_syncTs?("（最近同步 "+p(new Date(_syncTs*1000).getHours())+":"+p(new Date(_syncTs*1000).getMinutes())+":"+p(new Date(_syncTs*1000).getSeconds())+"）"):"");
+  if(_syncState==="syncing") return "正在和云端同步…";
+  return "未连上云端，正在用本地数据";
+}
+document.addEventListener("click", function(e){
+  var dot=e.target && e.target.closest ? e.target.closest("#syncDot") : null;
+  if(dot) toast(syncStateText());
+});
 // ============ COS 直连结束 ============
 
 // 启动：先用 localStorage 填充（保证刷新不丢），再用 COS 云端数据做「条目级合并」：
@@ -1156,8 +1182,9 @@ function ensureLoaded(){
     }catch(e){}
     wNormalizeAllLocal();   // 旧数据补确定性 id/mtime（离线可做，多端结果一致）
   }
+  setSyncState("syncing");
   return cosFetch("GET", COS_DATA_KEY).then(function(r){
-    if(!r.ok) return null;
+    if(!r.ok){ setSyncState("offline"); return null; }
     return r.text();
   }).then(function(t){
     var d=null;
@@ -1168,8 +1195,9 @@ function ensureLoaded(){
       for(var k in STORE){ _lset(k, STORE[k]); }
       if(JSON.stringify(STORE) !== before) cosSaveAll();   // 有差异 → 推回云端
     }
+    setSyncState("online", Math.floor(Date.now()/1000));
     _loaded=true; return STORE;
-  }).catch(function(){ _loaded=true; return STORE; });
+  }).catch(function(){ setSyncState("offline"); _loaded=true; return STORE; });
 }
 // 读取：内存优先（内存已含 localStorage 初始值）
 function LS_get(k){ return (k in STORE) ? STORE[k] : null; }
