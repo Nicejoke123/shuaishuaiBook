@@ -109,6 +109,12 @@ def index():
     return send_from_directory(BASE, "index.html")
 
 
+# 前端 COS 密钥外置文件（部署时把 config/cos.json 放进容器即可启用云同步；文件缺失 → 前端自动降级为纯本地）
+@APP.route("/config/<path:fn>")
+def config_file(fn):
+    return send_from_directory(os.path.join(BASE, "config"), fn)
+
+
 # ===== CORS：支持网页版从其它域名跨域调用（同源部署则无影响）=====
 @APP.after_request
 def _cors(resp):
