@@ -776,7 +776,7 @@ function _lset(k,v){ try{ localStorage.setItem(_lsk(k), v); }catch(e){} }
 function apiUrl(p){ return API_BASE + p + (p.indexOf("?")>=0?"&":"?") + "pwd=" + encodeURIComponent(PWD); }
 
 // ============ 多端离线合并引擎（与小程序 utils/merge.js 同一份逻辑，由 _gen_web_engine.js 生成，勿手改！）============
-var KEY_TRASH_W = { tasks:"kb_trash_tasks", notes:"kb_trash_notes", custom:"kb_trash_custom" };
+var KEY_TRASH_W = { tasks:"kb_trash_tasks", notes:"kb_trash_notes", custom:"kb_trash_custom", letters:"kb_trash_letters" };
 
 function wNowSec(){ return Math.floor(Date.now()/1000); }
 
@@ -793,8 +793,8 @@ function wEntryMtime(it){
   return wParseTimeStr(it.time);
 }
 
-function wIsListKey(k){ return k === "kb_custom" || k.indexOf("kb_tasks_")===0 || k.indexOf("kb_notes_")===0; }
-function wListKind(k){ return k === "kb_custom" ? "custom" : (k.indexOf("kb_tasks_")===0 ? "tasks" : "notes"); }
+function wIsListKey(k){ return k === "kb_custom" || k === "kb_letters" || k.indexOf("kb_tasks_")===0 || k.indexOf("kb_notes_")===0; }
+function wListKind(k){ return k === "kb_custom" ? "custom" : (k === "kb_letters" ? "letters" : (k.indexOf("kb_tasks_")===0 ? "tasks" : "notes")); }
 function wIsTrashKey(k){ return k===KEY_TRASH_W.tasks || k===KEY_TRASH_W.notes || k===KEY_TRASH_W.custom; }
 function wTrashKeyFor(kind){ return KEY_TRASH_W[kind]; }
 
@@ -979,6 +979,7 @@ function wSyncMerge(mem, cloud){
 
 
 // ============ 合并引擎结束 ============
+
 
 
 
