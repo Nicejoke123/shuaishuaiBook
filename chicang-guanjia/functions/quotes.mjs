@@ -221,6 +221,55 @@ export async function fetchFundHoldingsDetail(fundCode) {
   return { rows, disclosure_date };
 }
 
+// ---- Fund profile + period returns for the detail sheet (公开档案，无用户数据) ----
+// NOTE: Number("") === 0, so blank upstream cells must be nulled explicitly.
+const nnum = (v) => (String(v ?? "").trim() === "" ? null : num(v));
+const dash = (v) => {
+  const s = String(v ?? "").trim();
+  return s === "" || s === "--" ? null : s;
+};
+const PERIOD_LABELS = {
+  Z: "近1周", Y: "近1月", "3Y": "近3月", "6Y": "近6月", "1N": "近1年",
+  "2N": "近2年", "3N": "近3年", "5N": "近5年", JN: "今年来", LN: "成立来",
+};
+
+export async function fetchFundProfile(fundCode) {
+  const qs = FUND_QS;
+  const [basicRes, periodRes] = await Promise.all([
+    get(`https://fundmobapi.eastmoney.com/FundMNewApi/FundMNNBasicInformation?FCODE=${fundCode}&${qs}`),
+    get(`https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease?FCODE=${fundCode}&${qs}`)
+      .catch(() => null),
+  ]);
+  const d = (await basicRes.json())?.Datas;
+  if (!d || !d.FCODE) throw new Error("fund_profile_unavailable");
+  const profile = {
+    name: dash(d.SHORTNAME), ftype: dash(d.FTYPE), company: dash(d.JJGS),
+    estab_date: dash(d.ESTABDATE), scale_yuan: nnum(d.ENDNAV), risk_level: nnum(d.RISKLEVEL),
+    nav: nnum(d.DWJZ), nav_date: dash(d.FSRQ), day_pct: nnum(d.RZDF), cum_nav: nnum(d.LJJZ),
+    buy_status: dash(d.SGZT), redeem_status: dash(d.SHZT), min_buy: nnum(d.MINSG),
+    rate_pct: nnum(String(d.RATE ?? "").replace("%", "")),
+    source_rate_pct: nnum(String(d.SOURCERATE ?? "").replace("%", "")),
+    index_name: dash(d.INDEXNAME), bench: dash(d.BENCH),
+    qdii: /QDII|海外/.test(String(d.FTYPE ?? "")),
+    // 近1年风险指标（东财口径；SHARP2/3 与跟踪误差语义不明，不展示）
+    sharpe_1y: nnum(d.SHARP1), max_retra_1y: nnum(d.MAXRETRA1), stddev_1y: nnum(d.STDDEV1),
+  };
+  let periods = [];
+  try {
+    const list = (await periodRes?.json())?.Datas;
+    if (Array.isArray(list)) {
+      periods = list
+        .filter((x) => PERIOD_LABELS[x.title] && nnum(x.syl) != null)
+        .map((x) => ({
+          key: x.title, label: PERIOD_LABELS[x.title], mine: nnum(x.syl),
+          avg: nnum(x.avg), hs300: nnum(x.hs300),
+          rank: nnum(x.rank) ?? null, total: nnum(x.sc) ?? null,
+        }));
+    }
+  } catch { /* periods optional */ }
+  return { profile, periods };
+}
+
 export async function fetchFundTopHoldings(fundCode) {
   // latest disclosed top-10 A-share holdings: [{code:"sz002821", name, weightPct}]
   const res = await get(

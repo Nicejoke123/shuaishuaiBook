@@ -4,6 +4,7 @@
 import {
   fetchRealtimeByCodes, fetchKlineHistory, fetchFundNavHistory, fetchFundName,
   fetchFundIndexBinding, fetchFundTopHoldings, fetchBankGoldRealtime, fetchFundHoldingsDetail,
+  fetchFundProfile,
   lookupSymbol, isExchangeCode, isFundCode, GOLD_CODE, GOLD_BANKS,
 } from "./quotes.mjs";
 import { evaluatePosition, evaluateAllocation, feeConfig, buildBuyLots, sellFeeEstimate } from "./rules.mjs";
@@ -483,9 +484,35 @@ async function route(action, method, request, supabase, url) {
         return json({ ok: false, error: "holdings_unavailable", rows: [], disclosure_date: null });
       }
     }
+    if (action === "fundinfo") {
+      // 基金档案 + 阶段涨幅 + 持仓大头（公开数据，无用户信息，故与 holdings 一样免 user_id）
+      const code = url.searchParams.get("code") ?? "";
+      if (!isFundCode(code)) return json({ error: "invalid_code", ok: false }, 400);
+      const pure = code.slice(1);
+      const [info, hold] = await Promise.allSettled([
+        fetchFundProfile(pure), fetchFundHoldingsDetail(pure),
+      ]);
+      if (info.status !== "fulfilled") {
+        return json({ ok: false, error: "fundinfo_unavailable", profile: null, periods: [], rows: [], disclosure_date: null });
+      }
+      const { profile, periods } = info.value;
+      const holdings = hold.status === "fulfilled" ? hold.value : { rows: [], disclosure_date: null };
+      return json({
+        ok: true, profile, periods,
+        rows: holdings.rows, disclosure_date: holdings.disclosure_date,
+      });
+    }
+    if (action === "history") {
+      // 收盘价/净值快照序列：纯行情历史、不含用户数据，故与 holdings 一样免 user_id
+      const code = url.searchParams.get("code") ?? "";
+      if (!code || code.length > 12) return json({ error: "invalid_code", ok: false }, 400);
+      const days = Math.min(120, Number(url.searchParams.get("days") ?? 60) || 60);
+      const data = await selectWhere(supabase, "snapshots", "snapshot_date,price", { code }, ["snapshot_date", false]);
+      return json({ ok: true, points: data.slice(0, days).reverse()
+        .map((s) => ({ date: s.snapshot_date, price: s.price })) });
+    }
     const uid = url.searchParams.get("user_id");
-    if (!UUID_RE.test(uid ?? "")) return json({ error: "invalid_user_id", ok: false }, 400);
-    if (action === "dashboard") {
+    if (!UUID_RE.test(uid ?? "")) return json({ error: "invalid_user_id", ok: false }, 400);    if (action === "dashboard") {
       const parts0 = cnParts();
       try { await billDcaPlans(supabase, uid, parts0.today); } catch { /* billing must never break viewing */ }
       const [positions, advToday, dcaRows, settingsRows] = await Promise.all([
@@ -560,7 +587,15 @@ async function route(action, method, request, supabase, url) {
       const exchSession = tradingToday && parts.minutes >= SESSION.start && parts.minutes < SESSION.end;
       const goldSession = tradingToday && parts.minutes >= 9 * 60 && parts.minutes < CUTOFF.gold;
       const positions = await selectWhere(supabase, "positions",
-        "code,name,asset_type,quantity,overrides", { user_id: uid });
+        "code,name,asset_type,quantity,cost_price,opened_date,overrides", { user_id: uid });
+      // 每只持仓的最近一条建议（详情抽屉展示用；advices 按日期倒序，首次出现即最新）
+      const adviceRows = await selectWhere(supabase, "advices",
+        "code,action,rule_id,severity,reason,advice_date", { user_id: uid }, ["advice_date", false])
+        .catch(() => []);
+      const adviceByCode = {};
+      for (const a of adviceRows) {
+        if (a.code && !adviceByCode[a.code]) adviceByCode[a.code] = a;
+      }
       const codes = [...new Set(positions.map((p) => p.code))];
       let realtime = {};
       try { realtime = await fetchRealtimeByCodes(codes); } catch { /* rows fall back to snapshots/none */ }
@@ -616,8 +651,14 @@ async function route(action, method, request, supabase, url) {
         const r = bankRt ?? realtime[p.code] ?? snapFallback[p.code];
         const row = { code: p.code, name: p.name, status: "none", price: null, prev_close: null,
           day_pct: null, day_amount: null, market_value: null, ref_date: null, basis: null,
+          cost_price: Number(p.cost_price) || null, quantity: qty || null,
+          pnl_pct: null, pnl_amount: null, days_held: null, advice: adviceByCode[p.code] ?? null,
           bank: bk ? (bankRt ? bankRt.bankLabel : "SGE基准(渠道暂不可用)") : null,
           is_qdii: p.asset_type === "fund" ? !!qdiiByCode[p.code] : undefined };
+        if (p.opened_date) {
+          row.days_held = Math.max(0, Math.round(
+            (Date.parse(`${parts.today}T00:00:00Z`) - Date.parse(`${p.opened_date}T00:00:00Z`)) / 86400000));
+        }
         if (r && r.price != null) {
           const nav = Number(r.price);
           const prev = r.prevClose != null ? Number(r.prevClose) : null;
@@ -657,6 +698,11 @@ async function route(action, method, request, supabase, url) {
             row.market_value = round2(nav * qty);
           }
         }
+        if (row.market_value != null && row.cost_price && qty) {
+          const costTotal = row.cost_price * qty;
+          row.pnl_amount = round2(row.market_value - costTotal);
+          row.pnl_pct = costTotal ? round2((row.market_value / costTotal - 1) * 100) : null;
+        }
         (byType[p.asset_type] ?? byType.stock).push(row);
       }
       const TODAY_LABELS = { fund: "场外基金", etf: "场内ETF", gold: "积存金", stock: "股票" };
@@ -692,12 +738,6 @@ async function route(action, method, request, supabase, url) {
         total: { amount: totalAmount, pct: totalMv ? round2(totalAmount / totalMv * 100) : null },
         groups,
       });
-    }
-    if (action === "history") {
-      const code = url.searchParams.get("code") ?? "";
-      const days = Math.min(120, Number(url.searchParams.get("days") ?? 60) || 60);
-      const data = await selectWhere(supabase, "snapshots", "snapshot_date,price", { code }, ["snapshot_date", false]);
-      return json({ ok: true, points: data.slice(0, days).reverse() });
     }
     if (action === "trades") {
       const data = await selectWhere(supabase, "trades",
