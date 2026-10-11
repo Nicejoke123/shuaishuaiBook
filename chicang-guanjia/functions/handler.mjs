@@ -536,14 +536,33 @@ async function route(action, method, request, supabase, url) {
         "code,name,asset_type,quantity", { user_id: uid });
       const codes = [...new Set(positions.map((p) => p.code))];
       let realtime = {};
-      try { realtime = await fetchRealtimeByCodes(codes); } catch { /* rows fall back to status none */ }
+      try { realtime = await fetchRealtimeByCodes(codes); } catch { /* rows fall back to snapshots/none */ }
+      // feed down (e.g. SGE weekends) -> fall back to the two last recorded snapshots
+      const missing = codes.filter((c) => realtime[c]?.price == null);
+      const snapFallback = {};
+      if (missing.length) {
+        const snaps = await selectWhere(supabase, "snapshots", "code,snapshot_date,price", { code: missing });
+        const byCode = {};
+        for (const s of snaps) (byCode[s.code] ??= []).push(s);
+        for (const [c, arr] of Object.entries(byCode)) {
+          arr.sort((a, b) => (a.snapshot_date < b.snapshot_date ? -1 : 1));
+          const last = arr[arr.length - 1];
+          const prev = arr.length > 1 ? arr[arr.length - 2] : null;
+          snapFallback[c] = {
+            price: Number(last.price), prevClose: prev ? Number(prev.price) : null,
+            pct: prev && Number(prev.price) ? round2((Number(last.price) / Number(prev.price) - 1) * 100) : null,
+            quoteTime: last.snapshot_date, fromSnapshot: true,
+          };
+        }
+      }
       // OTC estimates: from session start until that day's NAV is published; skip already-confirmed funds
       let estimates = {};
-      const estTargets = codes.filter((c) => isFundCode(c) && realtime[c]?.quoteTime !== anchor);
+      const navDateOf = (c) => realtime[c]?.quoteTime ?? snapFallback[c]?.quoteTime;
+      const estTargets = codes.filter((c) => isFundCode(c) && navDateOf(c) !== anchor);
       if (estTargets.length && tradingToday && parts.minutes >= SESSION.start) {
         const base = {};
         for (const c of estTargets) {
-          const r = realtime[c];
+          const r = realtime[c] ?? snapFallback[c];
           if (r?.price != null) base[c] = { date: r.quoteTime, price: Number(r.price) };
         }
         try { estimates = await buildEstimates(supabase, estTargets, base); } catch { /* optional */ }
@@ -551,7 +570,7 @@ async function route(action, method, request, supabase, url) {
       const byType = { fund: [], etf: [], gold: [], stock: [] };
       for (const p of positions) {
         const qty = Number(p.quantity);
-        const r = realtime[p.code];
+        const r = realtime[p.code] ?? snapFallback[p.code];
         const row = { code: p.code, name: p.name, status: "none",
           day_pct: null, day_amount: null, market_value: null, ref_date: null, basis: null };
         if (r && r.price != null) {
@@ -582,7 +601,7 @@ async function route(action, method, request, supabase, url) {
               }
             }
           } else {
-            row.status = (p.asset_type === "gold" ? goldSession : exchSession) ? "realtime" : "closed";
+            row.status = (!r.fromSnapshot && (p.asset_type === "gold" ? goldSession : exchSession)) ? "realtime" : "closed";
             row.ref_date = tradingToday ? parts.today : anchor;
             row.day_pct = pctv;
             row.day_amount = prev != null ? round2((nav - prev) * qty) : null;
