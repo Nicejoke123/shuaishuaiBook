@@ -520,6 +520,111 @@ async function route(action, method, request, supabase, url) {
         dca_plans: dcaRows.map((r) => ({ ...r, freq_label: dcaFreqLabel(r) })),
       });
     }
+    if (action === "today") {
+      // M6 今日收益（design 11）：只读展示，不落库、不重算建议、不扣定投
+      const parts = cnParts();
+      const tradingToday = isTradingDay(parts);
+      let anchor = parts.today;
+      if (!tradingToday) {
+        let d = parts.today;
+        do { d = addDays(d, -1); } while (weekdayOf(d) === 0 || weekdayOf(d) === 6);
+        anchor = d;
+      }
+      const exchSession = tradingToday && parts.minutes >= SESSION.start && parts.minutes < SESSION.end;
+      const goldSession = tradingToday && parts.minutes >= 9 * 60 && parts.minutes < CUTOFF.gold;
+      const positions = await selectWhere(supabase, "positions",
+        "code,name,asset_type,quantity", { user_id: uid });
+      const codes = [...new Set(positions.map((p) => p.code))];
+      let realtime = {};
+      try { realtime = await fetchRealtimeByCodes(codes); } catch { /* rows fall back to status none */ }
+      // OTC estimates: from session start until that day's NAV is published; skip already-confirmed funds
+      let estimates = {};
+      const estTargets = codes.filter((c) => isFundCode(c) && realtime[c]?.quoteTime !== anchor);
+      if (estTargets.length && tradingToday && parts.minutes >= SESSION.start) {
+        const base = {};
+        for (const c of estTargets) {
+          const r = realtime[c];
+          if (r?.price != null) base[c] = { date: r.quoteTime, price: Number(r.price) };
+        }
+        try { estimates = await buildEstimates(supabase, estTargets, base); } catch { /* optional */ }
+      }
+      const byType = { fund: [], etf: [], gold: [], stock: [] };
+      for (const p of positions) {
+        const qty = Number(p.quantity);
+        const r = realtime[p.code];
+        const row = { code: p.code, name: p.name, status: "none",
+          day_pct: null, day_amount: null, market_value: null, ref_date: null, basis: null };
+        if (r && r.price != null) {
+          const nav = Number(r.price);
+          const prev = r.prevClose != null ? Number(r.prevClose) : null;
+          const pctv = r.pct != null ? round2(Number(r.pct))
+            : prev && prev ? round2((nav / prev - 1) * 100) : null;
+          if (p.asset_type === "fund") {
+            const navDate = DATE_RE.test(String(r.quoteTime ?? "")) ? r.quoteTime : null;
+            if (navDate === anchor) {
+              row.status = "confirmed"; row.day_pct = pctv;
+              row.day_amount = prev != null ? round2((nav - prev) * qty) : null;
+              row.ref_date = navDate;
+              row.market_value = round2(nav * qty);
+            } else {
+              const est = estimates[p.code];
+              if (est && est.pct != null) {
+                row.status = "estimate"; row.basis = est.basis ?? null; row.ref_date = anchor;
+                row.day_pct = round2(est.pct);
+                row.day_amount = round2(nav * est.pct / 100 * qty);
+                row.market_value = round2(nav * (1 + est.pct / 100) * qty);
+              } else {
+                // last published day's move, shown greyed and excluded from totals
+                row.status = "pending"; row.day_pct = pctv;
+                row.day_amount = prev != null ? round2((nav - prev) * qty) : null;
+                row.ref_date = navDate;
+                row.market_value = round2(nav * qty);
+              }
+            }
+          } else {
+            row.status = (p.asset_type === "gold" ? goldSession : exchSession) ? "realtime" : "closed";
+            row.ref_date = tradingToday ? parts.today : anchor;
+            row.day_pct = pctv;
+            row.day_amount = prev != null ? round2((nav - prev) * qty) : null;
+            row.market_value = round2(nav * qty);
+          }
+        }
+        (byType[p.asset_type] ?? byType.stock).push(row);
+      }
+      const TODAY_LABELS = { fund: "场外基金", etf: "场内ETF", gold: "积存金", stock: "股票" };
+      const groups = [];
+      for (const t of ["fund", "etf", "gold", "stock"]) {
+        const rs = byType[t];
+        if (!rs.length) continue;
+        const bucket = (st) => round2(rs.filter((x) => x.status === st)
+          .reduce((s, x) => s + (x.day_amount ?? 0), 0));
+        const counted = rs.filter((x) => x.status !== "pending" && x.status !== "none");
+        const amount = round2(counted.reduce((s, x) => s + (x.day_amount ?? 0), 0));
+        const mv = counted.reduce((s, x) => s + (x.market_value ?? 0), 0);
+        groups.push({
+          type: t, label: TODAY_LABELS[t],
+          subtotal: {
+            amount, pct: mv ? round2(amount / mv * 100) : null,
+            live_amt: bucket("realtime"),
+            confirmed_amt: round2(bucket("closed") + bucket("confirmed")),
+            estimate_amt: bucket("estimate"),
+          },
+          pending_count: rs.filter((x) => x.status === "pending").length,
+          none_count: rs.filter((x) => x.status === "none").length,
+          rows: rs,
+        });
+      }
+      const totalAmount = round2(groups.reduce((s, g) => s + g.subtotal.amount, 0));
+      const totalMv = round2(groups.reduce((s, g) =>
+        s + g.rows.filter((x) => x.status !== "pending" && x.status !== "none")
+          .reduce((a, x) => a + (x.market_value ?? 0), 0), 0));
+      return json({
+        ok: true, anchor_date: anchor, anchor_is_today: tradingToday,
+        in_session: exchSession,
+        total: { amount: totalAmount, pct: totalMv ? round2(totalAmount / totalMv * 100) : null },
+        groups,
+      });
+    }
     if (action === "history") {
       const code = url.searchParams.get("code") ?? "";
       const days = Math.min(120, Number(url.searchParams.get("days") ?? 60) || 60);
