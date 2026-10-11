@@ -1,13 +1,13 @@
 # 持仓管家 · 微信云托管部署说明
 
-单容器同时提供静态前端与业务 API（同一套 `functions/handler.mjs` 业务代码，存储层从 Supabase 换成了 MySQL）。可以直接在微信云托管「代码模式」上传现成代码包 `chicang-cloudrun.zip`（就在本目录内）部署；修改代码后在本地项目重新构建、重新打包即可。
+单容器同时提供静态前端与业务 API（同一套 `functions/handler.mjs` 业务代码，存储层从 Supabase 换成了 MySQL）。可以直接在微信云托管「代码模式」上传现成代码包 `chicang-cloudrun.zip` 部署；本目录同时保留了源文件，改代码后用 `sh deploy/cloudrun/pack.sh` 重新打包。
 
 ## 一、准备 MySQL
 
 在云托管的 MySQL 实例（或你自己的 MySQL）里：
 
 1. 新建一个独立数据库，例如 `chicang`（字符集 utf8mb4）；
-2. 在该库中执行本目录的 `schema.sql`（控制台 DML 或 mysql 客户端均可），共 7 张表。
+2. 在该库中执行本目录的 `schema.sql`（控制台 DML 或 mysql 客户端均可），共 8 张表。
 
 只建库和建表，不写入任何业务数据；用户、持仓、快照都会在使用时自动生成。
 
@@ -15,7 +15,7 @@
 
 微信云托管控制台 → 你的服务环境 → **新建服务**（服务名例如 `chicang-guanjia`）：
 
-- 部署方式：代码模式 → 上传本地压缩包 → 选 `chicang-guanjia/chicang-cloudrun.zip`；
+- 部署方式：代码模式 → 上传本地压缩包 → 选 `deploy/cloudrun/chicang-cloudrun.zip`；
 - 构建：Dockerfile（包内已带，node:22-alpine，仅依赖 mysql2）；
 - 监听端口：**80**；
 - 健康检查路径（如有该项）：`/healthz`；
@@ -35,7 +35,7 @@
 | `DB_PASSWORD` | 数据库密码 |
 | `DB_NAME` | 库名，如 `chicang` |
 
-如果使用云托管自带的 MySQL，平台会自动注入 `MYSQL_ADDRESS / MYSQL_USERNAME / MYSQL_PASSWORD`（部分版本为 `WX_MYSQL_*`），主机/端口/账号/密码都能自动识别，只需额外添加一个 `DB_NAME`（填你的库名，如 `chicang`）即可。
+如果使用云托管自带的 MySQL，平台会自动注入 `WX_MYSQL_ADDRESS / WX_MYSQL_USER / WX_MYSQL_PWD / WX_MYSQL_DATABASE`，这些也能被自动识别，可以不填上面的变量（显式 `DB_*` 优先）。
 
 ## 四、开启公网访问并验收
 
@@ -47,9 +47,13 @@
 
 把公网地址发给我，我可以直接替你做一轮真实请求验收。
 
+## 五、M4 增量升级（定投 / 分组 / 盘中估算）
+
+已有库（如 `guanjia`）从旧版本升级时，**先**在该库执行本目录的 `migrate-m4.sql`（两条语句：trades 加 `source` 列、新建 `dca_plans` 表），**再**在云托管重新发布拉取最新代码。只发布代码不执行 SQL 的话，定投相关接口会报表不存在。
+
 ## 注意
 
 - **访问信任模型**：姓名只是数据分隔，不是访问控制。开启公网访问后，拿到链接的人输入姓名即可看到对应数据。当前设计面向「两个人私下使用」；如需更强隔离，后续可加简单口令或微信登录。
 - 所有建议由规则引擎生成，仅供参考，不构成投资建议。
-- 前端更新流程：本地项目 `npm run build` → 重新生成上传包 → 云托管重新上传发布新版本（Git 部署则直接推送到本目录）。
+- 前端更新流程：项目里 `npm run build` → `sh deploy/cloudrun/pack.sh` → 重新上传发布新版本。
 - `DB_DEV=memory` 只是本地冒烟测试模式（node:sqlite），线上请不要设置。

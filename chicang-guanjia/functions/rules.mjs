@@ -158,9 +158,12 @@ export function evaluatePosition(ctx) {
       const hitLevel = [...ladder].reverse().find((lv) => dd <= lv);
       if (hitLevel != null) {
         const trancheAmt = overrides.F1?.trancheAmount ?? settings.global?.F1?.trancheAmount ?? 1000;
+        const dcaNote = position.dca
+          ? `；该基金已有${position.dca.freqLabel}定投 ¥${fmt(position.dca.amount, 0)}，也可将本档补仓并入提高定投额度`
+          : "";
         push({
           ...base, rule_id: "F1", action: "buy", severity: "mid",
-          reason: `净值较 60 日高点 ${fmt(hi60)} 回撤 ${fmt(-dd, 1)}%，进入补仓档（-${fmt(-hitLevel, 0)}%）。可按计划分档补仓，参考单笔 ¥${fmt(trancheAmt, 0)}`,
+          reason: `净值较 60 日高点 ${fmt(hi60)} 回撤 ${fmt(-dd, 1)}%，进入补仓档（-${fmt(-hitLevel, 0)}%）。可按计划分档补仓，参考单笔 ¥${fmt(trancheAmt, 0)}${dcaNote}`,
           detail: { hi60, ddPct: round2(dd), level: hitLevel, refAmount: trancheAmt },
         });
       }
@@ -301,7 +304,7 @@ export function daysBetween(dateA, dateB) {
 }
 
 /** G1: portfolio-level allocation drift, needs all evaluated positions with market values. */
-export function evaluateAllocation(rows, settings) {
+export function evaluateAllocation(rows, settings, opts = {}) {
   // rows: [{asset_type, mv}], settings.targetAllocation: {stock:..,fund:..,etf:..,gold:..}
   const target = settings.targetAllocation;
   if (!target || !rows.length) return [];
@@ -316,10 +319,12 @@ export function evaluateAllocation(rows, settings) {
     const actual = ((groups[type] ?? 0) / total) * 100;
     if (Math.abs(actual - tgtPct) >= devPP) {
       const dir = actual > tgtPct ? "sell" : "buy";
+      const dcaNote = dir === "buy" && type === "fund" && opts.fundHasDca
+        ? "，或提高现有定投金额逐步消化" : "";
       out.push({
         code: "PORTFOLIO", name: labels[type] ?? type, asset_type: type,
         rule_id: "G1", action: dir, severity: "mid",
-        reason: `${labels[type] ?? type}实际占比 ${fmt(actual, 1)}%，偏离目标 ${fmt(tgtPct, 0)}% 达 ${fmt(Math.abs(actual - tgtPct), 1)}pp，建议${dir === "buy" ? "增配" : "减配"}约 ¥${fmt(Math.abs((tgtPct / 100) * total - (groups[type] ?? 0)), 0)}`,
+        reason: `${labels[type] ?? type}实际占比 ${fmt(actual, 1)}%，偏离目标 ${fmt(tgtPct, 0)}% 达 ${fmt(Math.abs(actual - tgtPct), 1)}pp，建议${dir === "buy" ? "增配" : "减配"}约 ¥${fmt(Math.abs((tgtPct / 100) * total - (groups[type] ?? 0)), 0)}${dcaNote}`,
         detail: { actualPct: round2(actual), targetPct: tgtPct },
       });
     }

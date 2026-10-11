@@ -100,6 +100,47 @@ export async function fetchFundName(fundCode) {
   return m ? m[1] : null;
 }
 
+// ---- Intraday estimation sources (verified 2026-10-11) ----
+// Official fund intraday valuation feeds were taken offline by regulation; we build
+// our own estimate: index funds via their tracked index, active funds via the latest
+// quarterly top-10 holdings. Display only — never for advice or billing.
+
+export async function fetchFundIndexBinding(fundCode) {
+  // -> { indexCode: "sh000300", indexName, ftype } | null (null when no public index)
+  const res = await get(
+    `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNNBasicInformation?FCODE=${fundCode}&${FUND_QS}`,
+  );
+  const json = await res.json();
+  const d = json?.Datas;
+  if (!d) return null;
+  const idx = String(d.INDEXCODE ?? "").trim();
+  if (!/^\d{6}$/.test(idx)) return null;
+  const exch = String(d.NEWINDEXTEXCH ?? d.INDEXTEXCH ?? "");
+  const prefix = exch === "1" ? "sh" : exch === "0" ? "sz" : null;
+  if (!prefix) return null;
+  return { indexCode: prefix + idx, indexName: d.INDEXNAME ?? null, ftype: d.FTYPE ?? null };
+}
+
+export async function fetchFundTopHoldings(fundCode) {
+  // latest disclosed top-10 A-share holdings: [{code:"sz002821", name, weightPct}]
+  const res = await get(
+    `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition?FCODE=${fundCode}&${FUND_QS}`,
+  );
+  const json = await res.json();
+  const stocks = json?.Datas?.fundStocks ?? [];
+  const out = [];
+  for (const s of stocks.slice(0, 10)) {
+    const code = String(s.GPDM ?? "").trim();
+    const t = String(s.NEWTEXCH ?? "");
+    const prefix = t === "1" ? "sh" : t === "0" ? "sz" : null; // HK-connect / BJ skipped
+    const w = Number(s.JZBL);
+    if (code.length === 6 && prefix && Number.isFinite(w) && w > 0) {
+      out.push({ code: prefix + code, name: s.GPJC ?? null, weightPct: w });
+    }
+  }
+  return out;
+}
+
 // ---- Code lookup for the position form ----
 const unescapeUnicode = (s) => s.replace(/\\u([\da-f]{4})/gi, (_, h) =>
   String.fromCharCode(parseInt(h, 16)));

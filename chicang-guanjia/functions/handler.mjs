@@ -3,6 +3,7 @@
 // server-side validation. Numbers are stored as validated numeric strings.
 import {
   fetchRealtimeByCodes, fetchKlineHistory, fetchFundNavHistory, fetchFundName,
+  fetchFundIndexBinding, fetchFundTopHoldings,
   lookupSymbol, isExchangeCode, isFundCode, GOLD_CODE,
 } from "./quotes.mjs";
 import { evaluatePosition, evaluateAllocation } from "./rules.mjs";
@@ -28,6 +29,13 @@ const isTradingDay = ({ weekday }) => weekday >= 1 && weekday <= 5;
 
 // snapshot cutoffs (China minutes): stocks/ETF after 15:05, gold after 20:30, funds after 20:30
 const CUTOFF = { exchange: 15 * 60 + 5, gold: 20 * 60 + 30, fund: 20 * 60 + 30 };
+
+// ---------- calendar helpers (YYYY-MM-DD China dates as UTC day keys) ----------
+const parseYmd = (s) => new Date(`${s}T00:00:00Z`);
+const addDays = (s, n) => new Date(parseYmd(s).getTime() + n * 86400000).toISOString().slice(0, 10);
+const weekdayOf = (s) => parseYmd(s).getUTCDay(); // 0=Sun
+const nextWeekday = (s) => { let d = s; while (weekdayOf(d) === 0 || weekdayOf(d) === 6) d = addDays(d, 1); return d; };
+const round2 = (n) => Math.round(n * 100) / 100;
 
 // ---------- small db helpers ----------
 async function rows(supabase, table, build) {
@@ -162,14 +170,161 @@ async function backfillIfNeeded(supabase, code, history) {
   return history;
 }
 
+// ---------- DCA plans: lazy auto-billing (design 9.1) ----------
+const FREQS = new Set(["daily", "weekly", "monthly"]);
+const PLAN_COLS = "id,position_id,amount,freq,wday,mday,status,start_date,last_billed_date";
+const dcaFreqLabel = (p) =>
+  p.freq === "daily" ? "每日"
+    : p.freq === "weekly" ? `每周${"日一二三四五六"[Number(p.wday)] ?? "日"}`
+    : `每月${Number(p.mday)}号`;
+
+function isDcaOccurrence(plan, dateStr) {
+  const wd = weekdayOf(dateStr);
+  if (plan.freq === "daily") return wd >= 1 && wd <= 5; // daily DCA deducts on trading days only
+  if (plan.freq === "weekly") return wd === Number(plan.wday);
+  if (plan.freq === "monthly") return Number(dateStr.slice(8, 10)) === Number(plan.mday);
+  return false;
+}
+function nextDcaOccurrence(plan, fromDate) {
+  let d = fromDate;
+  for (let i = 0; i < 400; i++, d = addDays(d, 1)) if (isDcaOccurrence(plan, d)) return d;
+  return null;
+}
+
+async function billDcaPlans(supabase, userId, today) {
+  const plans = await selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: userId, status: "active" });
+  let billed = 0;
+  for (const plan of plans) {
+    const pos = await selectWhere(supabase, "positions", "id,code,quantity,cost_price",
+      { id: plan.position_id, user_id: userId });
+    if (!pos.length) continue;
+    let cursor = plan.last_billed_date ? addDays(plan.last_billed_date, 1) : plan.start_date;
+    if (cursor > today) continue;
+    const snaps = await selectWhere(supabase, "snapshots", "snapshot_date,price",
+      { code: pos[0].code }, ["snapshot_date", true]);
+    let qty = Number(pos[0].quantity), cost = Number(pos[0].cost_price);
+    for (let n = 0; n < 40; n++) { // bound work per trigger
+      const occ = nextDcaOccurrence(plan, cursor);
+      if (!occ || occ > today) break;
+      cursor = addDays(occ, 1);
+      const stateKey = `dca:${plan.id}:${occ}`;
+      if (await getRunState(supabase, stateKey)) continue; // already billed (or manually corrected)
+      const billDate = nextWeekday(occ); // weekend debit shifts to Monday
+      if (billDate > today) break;       // not debited yet
+      const nav = snaps.find((s) => s.snapshot_date >= occ && s.snapshot_date <= addDays(occ, 12)
+        && Number(s.price) > 0);
+      if (!nav) break; // NAV not published yet (holiday/evening): stop, catch up next trigger
+      const addQty = Math.round((Number(plan.amount) / Number(nav.price)) * 100) / 100;
+      if (addQty > 0) {
+        const newCost = qty + addQty > 0
+          ? (qty * cost + addQty * Number(nav.price)) / (qty + addQty) : Number(nav.price);
+        const newQty = qty + addQty;
+        await insertRow(supabase, "trades", {
+          id: crypto.randomUUID(), user_id: userId, position_id: pos[0].id, side: "buy",
+          price: nav.price, quantity: String(addQty), trade_date: billDate, source: "dca",
+          created_at: new Date().toISOString(),
+        });
+        const r = await supabase.from("positions")
+          .update({ quantity: String(round(newQty)), cost_price: String(round(newCost, 4)), updated_at: new Date().toISOString() })
+          .eq("id", pos[0].id).eq("user_id", userId);
+        if (r.error) throw new Error("db_positions_update");
+        qty = newQty; cost = newCost;
+        await setRunState(supabase, stateKey, billDate);
+        const up = await supabase.from("dca_plans")
+          .update({ last_billed_date: occ, updated_at: new Date().toISOString() }).eq("id", plan.id);
+        if (up.error) throw new Error("db_dca_plans_update");
+        plan.last_billed_date = occ;
+        billed++;
+      }
+    }
+  }
+  return billed;
+}
+
+async function rebuildPositionFromTrades(supabase, userId, positionId) {
+  // deterministic replay of remaining trades (used after a manual trade deletion)
+  const trades = await selectWhere(supabase, "trades", "side,price,quantity",
+    { user_id: userId, position_id: positionId }, ["trade_date", true]);
+  let qty = 0, cost = 0;
+  for (const t of trades) {
+    const q = Number(t.quantity), p = Number(t.price);
+    if (t.side === "buy") {
+      cost = qty + q > 0 ? (qty * cost + q * p) / (qty + q) : p;
+      qty += q;
+    } else qty = Math.max(0, qty - q);
+  }
+  const r = await supabase.from("positions")
+    .update({ quantity: String(round(qty)), cost_price: String(round(cost, 4)), updated_at: new Date().toISOString() })
+    .eq("id", positionId).eq("user_id", userId);
+  if (r.error) throw new Error("db_positions_update");
+  return { quantity: String(round(qty)), cost_price: String(round(cost, 4)) };
+}
+
+// ---------- intraday fund estimates (design 9.3): display-only ----------
+const SESSION = { start: 9 * 60 + 30, end: 15 * 60 };
+const META_TTL_MS = 7 * 86400000, META_RETRY_MS = 86400000;
+
+async function fundMeta(supabase, code) {
+  const key = `fundmeta:${code}`;
+  const cached = await getRunState(supabase, key);
+  const age = cached?.cached_at ? Date.now() - Date.parse(cached.cached_at) : Infinity;
+  const useful = cached && (cached.indexCode || (cached.holdings ?? []).length);
+  if (cached && age < (useful ? META_TTL_MS : META_RETRY_MS)) return cached;
+  let indexCode = null, holdings = [];
+  try {
+    const b = await fetchFundIndexBinding(code.slice(1));
+    if (b) indexCode = b.indexCode;
+  } catch { /* upstream failure */ }
+  if (!indexCode) {
+    try { holdings = await fetchFundTopHoldings(code.slice(1)); } catch { /* ignore */ }
+  }
+  const meta = { indexCode, holdings, cached_at: new Date().toISOString() };
+  await setRunState(supabase, key, meta);
+  return meta;
+}
+
+async function buildEstimates(supabase, fundCodes, latestNav) {
+  const metas = {};
+  for (const code of fundCodes) metas[code] = await fundMeta(supabase, code);
+  const need = [...new Set(Object.values(metas)
+    .flatMap((m) => (m.indexCode ? [m.indexCode] : m.holdings.map((h) => h.code))))];
+  let rt = {};
+  try { rt = await fetchRealtimeByCodes(need); } catch { return {}; }
+  const out = {};
+  for (const [code, m] of Object.entries(metas)) {
+    const base = latestNav[code]?.price;
+    if (!base) continue;
+    if (m.indexCode && rt[m.indexCode]?.pct != null) {
+      const pct = rt[m.indexCode].pct;
+      out[code] = { pct: round2(pct), est_nav: round2(base * (1 + pct / 100) * 1e2) / 1e2, basis: "index", label: "估" };
+    } else if (m.holdings.length) {
+      let acc = 0, cov = 0;
+      for (const h of m.holdings) {
+        const q = rt[h.code];
+        if (q?.pct != null) { acc += (h.weightPct / 100) * q.pct; cov += h.weightPct; }
+      }
+      if (cov >= 20) { // too little A-share coverage -> no meaningful estimate
+        out[code] = {
+          pct: Math.round(acc * 100) / 100,
+          est_nav: Math.round(base * (1 + acc / 100) * 1e4) / 1e4,
+          basis: "holdings", coverage: Math.round(cov), label: "粗估",
+        };
+      }
+    }
+  }
+  return out;
+}
+
 // ---------- advice generation ----------
 async function regenerateAdvices(supabase, userId, realtime, { today, minutes }) {
-  const [positions, settingsRows, tradesAll] = await Promise.all([
+  const [positions, settingsRows, tradesAll, dcaRows] = await Promise.all([
     selectWhere(supabase, "positions",
       "id,code,name,asset_type,quantity,cost_price,opened_date,overrides", { user_id: userId }),
     selectWhere(supabase, "settings", "data", { user_id: userId }),
     selectWhere(supabase, "trades", "position_id,side,trade_date", { user_id: userId }),
+    selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: userId, status: "active" }),
   ]);
+  const dcaByPos = Object.fromEntries(dcaRows.map((r) => [r.position_id, r]));
   const settings = settingsRows[0]?.data ?? {};
   const codes = [...new Set(positions.map((p) => p.code))];
   const histories = {};
@@ -202,6 +357,9 @@ async function regenerateAdvices(supabase, userId, realtime, { today, minutes })
         code: e.p.code, name: e.p.name, asset_type: e.p.asset_type,
         quantity: Number(e.p.quantity), costPrice: Number(e.p.cost_price),
         openedDate: e.p.opened_date, overrides: e.p.overrides ?? {},
+        dca: dcaByPos[e.p.id]
+          ? { amount: Number(dcaByPos[e.p.id].amount), freqLabel: dcaFreqLabel(dcaByPos[e.p.id]) }
+          : null,
       },
       quote: realtime[e.p.code] ?? { price: e.price },
       history: histories[e.p.code] ?? [],
@@ -213,6 +371,7 @@ async function regenerateAdvices(supabase, userId, realtime, { today, minutes })
   }
   out.push(...evaluateAllocation(
     enriched.map((e) => ({ asset_type: e.p.asset_type, mv: e.mv })), settings,
+    { fundHasDca: dcaRows.length > 0 },
   ));
 
   await deleteWhere(supabase, "advices", { user_id: userId, advice_date: today });
@@ -295,12 +454,15 @@ async function route(action, method, request, supabase, url) {
     const uid = url.searchParams.get("user_id");
     if (!UUID_RE.test(uid ?? "")) return json({ error: "invalid_user_id", ok: false }, 400);
     if (action === "dashboard") {
-      const [positions, advToday] = await Promise.all([
+      const parts0 = cnParts();
+      try { await billDcaPlans(supabase, uid, parts0.today); } catch { /* billing must never break viewing */ }
+      const [positions, advToday, dcaRows] = await Promise.all([
         selectWhere(supabase, "positions",
           "id,code,name,asset_type,quantity,cost_price,opened_date,overrides", { user_id: uid }),
         selectWhere(supabase, "advices",
           "id,code,name,asset_type,action,rule_id,severity,reason,detail,advice_date",
           { user_id: uid }, ["advice_date", false]),
+        selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: uid }),
       ]);
       const codes = [...new Set(positions.map((p) => p.code))];
       const snaps = await selectWhere(supabase, "snapshots", "code,snapshot_date,price", { code: codes.length ? codes : "__none__" });
@@ -315,18 +477,26 @@ async function route(action, method, request, supabase, url) {
       let realtime = {};
       try { realtime = await fetchRealtimeByCodes(rtTargets); } catch { /* snapshot fallback */ }
       const view = buildPositionsView(positions, realtime,
-        Object.fromEntries(Object.entries(latest).map(([k, v]) => [k, v.price])), cnParts().today);
+        Object.fromEntries(Object.entries(latest).map(([k, v]) => [k, v.price])), parts0.today);
       const total = view.reduce((s, v) => s + (v.market_value || 0), 0);
       const dayPnl = view.reduce((s, v) => {
         if (v.price == null || v.prev_close == null) return s;
         return s + (v.price - v.prev_close) * Number(v.quantity);
       }, 0);
+      // intraday estimates for OTC funds, trading session only (design 9.3)
+      let estimates = {};
+      const fundCodes = codes.filter(isFundCode);
+      if (fundCodes.length && isTradingDay(parts0)
+        && parts0.minutes >= SESSION.start && parts0.minutes < SESSION.end) {
+        try { estimates = await buildEstimates(supabase, fundCodes, latest); } catch { /* optional */ }
+      }
       const latestAdviceDate = advToday[0]?.advice_date ?? null;
       const advices = advToday.filter((a) => a.advice_date === latestAdviceDate);
       return json({
         ok: true, positions: view, total_value: Math.round(total * 100) / 100,
         day_pnl: Math.round(dayPnl * 100) / 100, advices, advice_date: latestAdviceDate,
-        snapshot_dates: latest,
+        snapshot_dates: latest, estimates,
+        dca_plans: dcaRows.map((r) => ({ ...r, freq_label: dcaFreqLabel(r) })),
       });
     }
     if (action === "history") {
@@ -337,10 +507,25 @@ async function route(action, method, request, supabase, url) {
     }
     if (action === "trades") {
       const data = await selectWhere(supabase, "trades",
-        "id,position_id,side,price,quantity,trade_date", { user_id: uid }, ["trade_date", false]);
+        "id,position_id,side,price,quantity,trade_date,source", { user_id: uid }, ["trade_date", false]);
       const positions = await selectWhere(supabase, "positions", "id,name,code", { user_id: uid });
       const names = Object.fromEntries(positions.map((p) => [p.id, p.name]));
       return json({ ok: true, trades: data.map((t) => ({ ...t, position_name: names[t.position_id] ?? t.position_id })) });
+    }
+    if (action === "dcas") {
+      const [plans, positions] = await Promise.all([
+        selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: uid }),
+        selectWhere(supabase, "positions", "id,name,code", { user_id: uid }),
+      ]);
+      const posById = Object.fromEntries(positions.map((p) => [p.id, p]));
+      return json({
+        ok: true,
+        plans: plans.map((r) => ({
+          ...r, freq_label: dcaFreqLabel(r),
+          position_name: posById[r.position_id]?.name ?? null,
+          code: posById[r.position_id]?.code ?? null,
+        })),
+      });
     }
     if (action === "settings") {
       const data = await selectWhere(supabase, "settings", "data", { user_id: uid });
@@ -393,8 +578,9 @@ async function route(action, method, request, supabase, url) {
         await setRunState(supabase, key, "done");
       }
     }
+    const billed = await billDcaPlans(supabase, uid, parts.today);
     const { totalValue } = await regenerateAdvices(supabase, uid, realtime, parts);
-    return json({ ok: true, realtime, regenerated_at: parts.today, total_value: totalValue });
+    return json({ ok: true, realtime, regenerated_at: parts.today, total_value: totalValue, dca_billed: billed });
   }
 
   if (action === "add_position") {
@@ -425,7 +611,7 @@ async function route(action, method, request, supabase, url) {
     await insertRow(supabase, "positions", position);
     await insertRow(supabase, "trades", {
       id: crypto.randomUUID(), user_id: uid, position_id: position.id, side: "buy",
-      price: cost, quantity, trade_date: openedDate,
+      price: cost, quantity, trade_date: openedDate, source: "manual",
       created_at: new Date().toISOString(),
     });
     return json({ ok: true, position });
@@ -492,13 +678,100 @@ async function route(action, method, request, supabase, url) {
     }
     await insertRow(supabase, "trades", {
       id: crypto.randomUUID(), user_id: uid, position_id: pid, side, price: String(price),
-      quantity: String(quantity), trade_date: tradeDate, created_at: new Date().toISOString(),
+      quantity: String(quantity), trade_date: tradeDate, source: "manual",
+      created_at: new Date().toISOString(),
     });
     const r = await supabase.from("positions")
       .update({ quantity: String(round(newQty)), cost_price: String(round(newCost, 4)), updated_at: new Date().toISOString() })
       .eq("id", pid).eq("user_id", uid);
     if (r.error) throw new Error("db_positions_update");
     return json({ ok: true, quantity: String(round(newQty)), cost_price: String(round(newCost, 4)) });
+  }
+
+  if (action === "add_dca") {
+    const pid = body.position_id;
+    if (!UUID_RE.test(pid ?? "")) return json({ error: "invalid_id", ok: false }, 400);
+    const pos = await selectWhere(supabase, "positions", "id,asset_type", { id: pid, user_id: uid });
+    if (!pos.length) return json({ error: "not_found", ok: false }, 404);
+    if (pos[0].asset_type !== "fund") return json({ error: "fund_only", ok: false }, 400);
+    const dup = await selectWhere(supabase, "dca_plans", "id", { position_id: pid });
+    if (dup.length) return json({ error: "duplicate_plan", ok: false }, 409);
+    const amount = amountStr(body.amount);
+    if (!amount) return json({ error: "invalid_amount", ok: false }, 400);
+    const sched = planSchedule(body);
+    if (sched.error) return json({ error: sched.error, ok: false }, 400);
+    const startDate = String(body.start_date ?? "");
+    if (!DATE_RE.test(startDate) || startDate > parts.today) return json({ error: "invalid_start_date", ok: false }, 400);
+    const iso = new Date().toISOString();
+    const row = {
+      id: crypto.randomUUID(), user_id: uid, position_id: pid, amount,
+      freq: sched.freq, wday: sched.wday, mday: sched.mday,
+      status: "active", start_date: startDate, last_billed_date: null,
+      created_at: iso, updated_at: iso,
+    };
+    await insertRow(supabase, "dca_plans", row);
+    let billed = 0;
+    try { billed = await billDcaPlans(supabase, uid, parts.today); } catch { /* next refresh catches up */ }
+    return json({ ok: true, plan: { ...row, freq_label: dcaFreqLabel(row) }, billed });
+  }
+
+  if (action === "update_dca") {
+    const planId = body.id;
+    if (!UUID_RE.test(planId ?? "")) return json({ error: "invalid_id", ok: false }, 400);
+    const existing = await selectWhere(supabase, "dca_plans", PLAN_COLS, { id: planId, user_id: uid });
+    if (!existing.length) return json({ error: "not_found", ok: false }, 404);
+    const base = existing[0];
+    const patch = { updated_at: new Date().toISOString() };
+    if (body.amount != null) {
+      const a = amountStr(body.amount);
+      if (!a) return json({ error: "invalid_amount", ok: false }, 400);
+      patch.amount = a;
+    }
+    if (body.freq != null || body.wday != null || body.mday != null) {
+      const sched = planSchedule(body, base);
+      if (sched.error) return json({ error: sched.error, ok: false }, 400);
+      Object.assign(patch, { freq: sched.freq, wday: sched.wday, mday: sched.mday });
+    }
+    if (body.status != null) {
+      if (!["active", "paused"].includes(body.status)) return json({ error: "invalid_status", ok: false }, 400);
+      patch.status = body.status;
+    }
+    if (body.start_date != null) {
+      if (!DATE_RE.test(body.start_date) || body.start_date > addDays(parts.today, 30)) {
+        return json({ error: "invalid_start_date", ok: false }, 400);
+      }
+      patch.start_date = body.start_date;
+    }
+    const r = await supabase.from("dca_plans").update(patch)
+      .eq("id", planId).eq("user_id", uid).select("id").maybeSingle();
+    if (r.error) throw new Error("db_dca_plans_update");
+    if (!r.data) return json({ error: "not_found", ok: false }, 404);
+    let billed = 0;
+    if ((patch.status ?? base.status) === "active") {
+      try { billed = await billDcaPlans(supabase, uid, parts.today); } catch { /* next refresh catches up */ }
+    }
+    return json({ ok: true, billed });
+  }
+
+  if (action === "delete_dca") {
+    const planId = body.id;
+    if (!UUID_RE.test(planId ?? "")) return json({ error: "invalid_id", ok: false }, 400);
+    const r = await supabase.from("dca_plans").delete()
+      .eq("id", planId).eq("user_id", uid).select("id").maybeSingle();
+    if (r.error) throw new Error("db_dca_plans_delete");
+    if (!r.data) return json({ error: "not_found", ok: false }, 404);
+    return json({ ok: true }); // generated trades stay; delete individual trades to correct history
+  }
+
+  if (action === "delete_trade") {
+    const tid = body.id;
+    if (!UUID_RE.test(tid ?? "")) return json({ error: "invalid_id", ok: false }, 400);
+    const t = await supabase.from("trades").delete()
+      .eq("id", tid).eq("user_id", uid).select("position_id").maybeSingle();
+    if (t.error) throw new Error("db_trades_delete");
+    if (!t.data) return json({ error: "not_found", ok: false }, 404);
+    const rebuilt = await rebuildPositionFromTrades(supabase, uid, t.data.position_id);
+    return json({ ok: true, ...rebuilt });
   }
 
   if (action === "set_settings") {
@@ -519,6 +792,29 @@ async function route(action, method, request, supabase, url) {
 }
 
 const round = (n, d = 4) => Number(n.toFixed(d));
+
+// frequency fields must stay consistent (weekly -> wday, monthly -> mday 1..28)
+function planSchedule(body, base = {}) {
+  const freq = body.freq != null ? String(body.freq) : base.freq;
+  if (!FREQS.has(freq)) return { error: "invalid_freq" };
+  let wday = base.wday ?? null;
+  let mday = base.mday ?? null;
+  if (body.wday != null) wday = String(body.wday);
+  if (body.mday != null) mday = String(body.mday);
+  if (freq === "weekly") {
+    if (!/^[0-6]$/.test(String(wday ?? ""))) return { error: "invalid_wday" };
+    mday = null;
+  } else if (freq === "monthly") {
+    const m = Number(mday);
+    if (!Number.isInteger(m) || m < 1 || m > 28) return { error: "invalid_mday" };
+    wday = null;
+    mday = String(m);
+  } else {
+    wday = null;
+    mday = null;
+  }
+  return { freq, wday, mday };
+}
 
 // only whitelisted numeric rule keys survive
 function sanitizeRuleMap(obj, max = 10) {

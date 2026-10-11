@@ -32,9 +32,27 @@ CREATE TABLE IF NOT EXISTS trades (
   price VARCHAR(32) NOT NULL,
   quantity VARCHAR(32) NOT NULL,
   trade_date VARCHAR(10) NOT NULL,
+  source VARCHAR(12) NOT NULL DEFAULT 'manual',
   created_at VARCHAR(40) NOT NULL,
   KEY idx_trades_user_date (user_id, trade_date),
   KEY idx_trades_position (position_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS dca_plans (
+  id CHAR(36) PRIMARY KEY,
+  user_id CHAR(36) NOT NULL,
+  position_id CHAR(36) NOT NULL,
+  amount VARCHAR(32) NOT NULL,
+  freq VARCHAR(8) NOT NULL,
+  wday VARCHAR(1) NULL,
+  mday VARCHAR(2) NULL,
+  status VARCHAR(8) NOT NULL,
+  start_date VARCHAR(10) NOT NULL,
+  last_billed_date VARCHAR(10) NULL,
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  UNIQUE KEY uq_dca_position (position_id),
+  KEY idx_dca_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS snapshots (
