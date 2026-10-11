@@ -39,7 +39,11 @@ const colList = (cols) =>
 const encode = (table, key, value) => {
   if (value === undefined || value === null) return null;
   if ((JSON_COLUMNS[table] ?? []).includes(key)) {
-    return typeof value === "string" ? value : JSON.stringify(value);
+    // JSON columns need valid JSON for every type, including plain strings
+    // ("done" must be stored as "\"done\""). Callers never pass pre-serialized text.
+    return typeof value === "string" && (value.startsWith("{") || value.startsWith("["))
+      ? value
+      : JSON.stringify(value);
   }
   return value;
 };
