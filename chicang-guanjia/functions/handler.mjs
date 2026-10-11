@@ -6,7 +6,7 @@ import {
   fetchFundIndexBinding, fetchFundTopHoldings,
   lookupSymbol, isExchangeCode, isFundCode, GOLD_CODE,
 } from "./quotes.mjs";
-import { evaluatePosition, evaluateAllocation } from "./rules.mjs";
+import { evaluatePosition, evaluateAllocation, feeConfig, buildBuyLots, sellFeeEstimate } from "./rules.mjs";
 
 const json = (body, status = 200) =>
   Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -194,10 +194,13 @@ function nextDcaOccurrence(plan, fromDate) {
 async function billDcaPlans(supabase, userId, today) {
   const plans = await selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: userId, status: "active" });
   let billed = 0;
+  const settingsRows = await selectWhere(supabase, "settings", "data", { user_id: userId });
+  const settingsData = settingsRows[0]?.data ?? {};
   for (const plan of plans) {
-    const pos = await selectWhere(supabase, "positions", "id,code,quantity,cost_price",
+    const pos = await selectWhere(supabase, "positions", "id,code,quantity,cost_price,overrides",
       { id: plan.position_id, user_id: userId });
     if (!pos.length) continue;
+    const feeCfg = feeConfig(settingsData, pos[0].overrides ?? {});
     let cursor = plan.last_billed_date ? addDays(plan.last_billed_date, 1) : plan.start_date;
     if (cursor > today) continue;
     const snaps = await selectWhere(supabase, "snapshots", "snapshot_date,price",
@@ -214,14 +217,19 @@ async function billDcaPlans(supabase, userId, today) {
       const nav = snaps.find((s) => s.snapshot_date >= occ && s.snapshot_date <= addDays(occ, 12)
         && Number(s.price) > 0);
       if (!nav) break; // NAV not published yet (holiday/evening): stop, catch up next trigger
-      const addQty = Math.round((Number(plan.amount) / Number(nav.price)) * 100) / 100;
+      // debit amount is gross: fee = net*r, shares bought with net = amount/(1+r)
+      const amount = Number(plan.amount);
+      const netAmt = amount / (1 + feeCfg.subscribePct / 100);
+      const addQty = Math.round((netAmt / Number(nav.price)) * 100) / 100;
+      const feeAmt = round2(amount - netAmt);
       if (addQty > 0) {
         const newCost = qty + addQty > 0
-          ? (qty * cost + addQty * Number(nav.price)) / (qty + addQty) : Number(nav.price);
+          ? (qty * cost + amount) / (qty + addQty) : amount / addQty;
         const newQty = qty + addQty;
         await insertRow(supabase, "trades", {
           id: crypto.randomUUID(), user_id: userId, position_id: pos[0].id, side: "buy",
           price: nav.price, quantity: String(addQty), trade_date: billDate, source: "dca",
+          fee: String(feeAmt), net_amount: String(round2(addQty * Number(nav.price))),
           created_at: new Date().toISOString(),
         });
         const r = await supabase.from("positions")
@@ -243,13 +251,15 @@ async function billDcaPlans(supabase, userId, today) {
 
 async function rebuildPositionFromTrades(supabase, userId, positionId) {
   // deterministic replay of remaining trades (used after a manual trade deletion)
-  const trades = await selectWhere(supabase, "trades", "side,price,quantity",
+  const trades = await selectWhere(supabase, "trades", "side,price,quantity,fee",
     { user_id: userId, position_id: positionId }, ["trade_date", true]);
   let qty = 0, cost = 0;
   for (const t of trades) {
     const q = Number(t.quantity), p = Number(t.price);
     if (t.side === "buy") {
-      cost = qty + q > 0 ? (qty * cost + q * p) / (qty + q) : p;
+      // buy-side fee (null for legacy rows and non-funds) is part of the true cost
+      const paid = q * p + (Number(t.fee) || 0);
+      cost = qty + q > 0 ? (qty * cost + paid) / (qty + q) : p;
       qty += q;
     } else qty = Math.max(0, qty - q);
   }
@@ -321,7 +331,7 @@ async function regenerateAdvices(supabase, userId, realtime, { today, minutes })
     selectWhere(supabase, "positions",
       "id,code,name,asset_type,quantity,cost_price,opened_date,overrides", { user_id: userId }),
     selectWhere(supabase, "settings", "data", { user_id: userId }),
-    selectWhere(supabase, "trades", "position_id,side,trade_date", { user_id: userId }),
+    selectWhere(supabase, "trades", "position_id,side,trade_date,quantity", { user_id: userId }),
     selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: userId, status: "active" }),
   ]);
   const dcaByPos = Object.fromEntries(dcaRows.map((r) => [r.position_id, r]));
@@ -349,9 +359,11 @@ async function regenerateAdvices(supabase, userId, realtime, { today, minutes })
 
   const out = [];
   for (const e of enriched) {
-    const lastBuys = tradesAll
-      .filter((t) => t.position_id === e.p.id && t.side === "buy")
-      .map((t) => t.trade_date).sort();
+    const posTrades = tradesAll
+      .filter((t) => t.position_id === e.p.id)
+      .sort((a, b) => (a.trade_date < b.trade_date ? -1 : 1));
+    const lastBuys = posTrades.filter((t) => t.side === "buy").map((t) => t.trade_date);
+    const isFund = e.p.asset_type === "fund";
     const advices = evaluatePosition({
       position: {
         code: e.p.code, name: e.p.name, asset_type: e.p.asset_type,
@@ -366,6 +378,8 @@ async function regenerateAdvices(supabase, userId, realtime, { today, minutes })
       totalValue, settings, today,
       lastBuyDate: lastBuys[lastBuys.length - 1] ?? null,
       indexCloses,
+      feeCfg: isFund ? feeConfig(settings, e.p.overrides ?? {}) : undefined,
+      buyLots: isFund ? buildBuyLots(posTrades) : undefined,
     });
     out.push(...advices);
   }
@@ -456,13 +470,14 @@ async function route(action, method, request, supabase, url) {
     if (action === "dashboard") {
       const parts0 = cnParts();
       try { await billDcaPlans(supabase, uid, parts0.today); } catch { /* billing must never break viewing */ }
-      const [positions, advToday, dcaRows] = await Promise.all([
+      const [positions, advToday, dcaRows, settingsRows] = await Promise.all([
         selectWhere(supabase, "positions",
           "id,code,name,asset_type,quantity,cost_price,opened_date,overrides", { user_id: uid }),
         selectWhere(supabase, "advices",
           "id,code,name,asset_type,action,rule_id,severity,reason,detail,advice_date",
           { user_id: uid }, ["advice_date", false]),
         selectWhere(supabase, "dca_plans", PLAN_COLS, { user_id: uid }),
+        selectWhere(supabase, "settings", "data", { user_id: uid }),
       ]);
       const codes = [...new Set(positions.map((p) => p.code))];
       const snaps = await selectWhere(supabase, "snapshots", "code,snapshot_date,price", { code: codes.length ? codes : "__none__" });
@@ -492,10 +507,16 @@ async function route(action, method, request, supabase, url) {
       }
       const latestAdviceDate = advToday[0]?.advice_date ?? null;
       const advices = advToday.filter((a) => a.advice_date === latestAdviceDate);
+      const dashSettings = settingsRows[0]?.data ?? {};
+      const feeCfgByPos = {};
+      for (const p of positions) {
+        if (p.asset_type === "fund") feeCfgByPos[p.id] = feeConfig(dashSettings, p.overrides ?? {});
+      }
       return json({
         ok: true, positions: view, total_value: Math.round(total * 100) / 100,
         day_pnl: Math.round(dayPnl * 100) / 100, advices, advice_date: latestAdviceDate,
         snapshot_dates: latest, estimates,
+        fee_defaults: dashSettings.fee ?? {}, fee_cfg_by_pos: feeCfgByPos,
         dca_plans: dcaRows.map((r) => ({ ...r, freq_label: dcaFreqLabel(r) })),
       });
     }
@@ -507,7 +528,7 @@ async function route(action, method, request, supabase, url) {
     }
     if (action === "trades") {
       const data = await selectWhere(supabase, "trades",
-        "id,position_id,side,price,quantity,trade_date,source", { user_id: uid }, ["trade_date", false]);
+        "id,position_id,side,price,quantity,trade_date,source,fee,net_amount", { user_id: uid }, ["trade_date", false]);
       const positions = await selectWhere(supabase, "positions", "id,name,code", { user_id: uid });
       const names = Object.fromEntries(positions.map((p) => [p.id, p.name]));
       return json({ ok: true, trades: data.map((t) => ({ ...t, position_name: names[t.position_id] ?? t.position_id })) });
@@ -603,15 +624,26 @@ async function route(action, method, request, supabase, url) {
     if (!name) return json({ error: "name_unresolved", ok: false }, 400);
     const dup = await selectWhere(supabase, "positions", "id", { user_id: uid, code });
     if (dup.length) return json({ error: "duplicate_code", ok: false }, 409);
+    // first fund purchase lot also pays subscription fee; cost basis becomes fee-inclusive (design 10.2)
+    let costStored = cost, feeInit = null, netInit = null;
+    if (assetType === "fund") {
+      const settingsRows = await selectWhere(supabase, "settings", "data", { user_id: uid });
+      const r = (settingsRows[0]?.data?.fee?.subscribePct ?? 0.15) / 100;
+      netInit = round2(Number(quantity) * Number(cost));
+      feeInit = round2(netInit * r);
+      costStored = String(round(Number(cost) * (1 + r), 4));
+    }
     const position = {
       id: crypto.randomUUID(), user_id: uid, code, name, asset_type: assetType,
-      quantity, cost_price: cost, opened_date: openedDate, overrides: null,
+      quantity, cost_price: costStored, opened_date: openedDate, overrides: null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
     await insertRow(supabase, "positions", position);
     await insertRow(supabase, "trades", {
       id: crypto.randomUUID(), user_id: uid, position_id: position.id, side: "buy",
       price: cost, quantity, trade_date: openedDate, source: "manual",
+      fee: feeInit == null ? null : String(feeInit),
+      net_amount: netInit == null ? null : String(netInit),
       created_at: new Date().toISOString(),
     });
     return json({ ok: true, position });
@@ -621,6 +653,19 @@ async function route(action, method, request, supabase, url) {
     const pid = body.id;
     if (!UUID_RE.test(pid ?? "")) return json({ error: "invalid_id", ok: false }, 400);
     const patch = {};
+    if (body.asset_type != null) {
+      // allow only stock↔etf corrections (codes stay exchange-format; fund/gold feeds differ)
+      const at = String(body.asset_type);
+      if (!ASSET_TYPES.has(at)) return json({ error: "invalid_asset_type", ok: false }, 400);
+      const cur = await selectWhere(supabase, "positions", "asset_type", { id: pid, user_id: uid });
+      if (!cur.length) return json({ error: "not_found", ok: false }, 404);
+      if (at !== cur[0].asset_type) {
+        if (!["stock", "etf"].includes(cur[0].asset_type) || !["stock", "etf"].includes(at)) {
+          return json({ error: "asset_type_locked", ok: false }, 400);
+        }
+        patch.asset_type = at;
+      }
+    }
     if (body.name != null) {
       const n = String(body.name).trim().slice(0, 40);
       if (!n) return json({ error: "invalid_name", ok: false }, 400);
@@ -664,28 +709,57 @@ async function route(action, method, request, supabase, url) {
     if (!price || !quantity || !DATE_RE.test(tradeDate)) {
       return json({ error: "invalid_trade", ok: false }, 400);
     }
-    const pos = await selectWhere(supabase, "positions", "id,quantity,cost_price", { id: pid, user_id: uid });
+    if (side === "sell" && tradeDate > parts.today) return json({ error: "invalid_date", ok: false }, 400);
+    const pos = await selectWhere(supabase, "positions",
+      "id,asset_type,quantity,cost_price,overrides", { id: pid, user_id: uid });
     if (!pos.length) return json({ error: "not_found", ok: false }, 404);
     const qty = Number(pos[0].quantity), cost = Number(pos[0].cost_price);
-    let newQty, newCost;
-    if (side === "buy") {
-      newCost = (qty * cost + quantity * price) / (qty + quantity);
-      newQty = qty + quantity;
+    const qtyN = Number(quantity), priceN = Number(price);
+    if (side === "sell" && quantity > qty + 1e-9) {
+      return json({ error: "sell_exceeds_position", ok: false }, 400);
+    }
+    let fee = null, net = null, newQty, newCost;
+    if (pos[0].asset_type === "fund") {
+      // OTC fund subscription/redemption fees (design 10.2); FIFO lots from trade history
+      const [settingsRows, tradeRows] = await Promise.all([
+        selectWhere(supabase, "settings", "data", { user_id: uid }),
+        selectWhere(supabase, "trades", "side,quantity,trade_date", { user_id: uid, position_id: pid },
+          ["trade_date", true]),
+      ]);
+      const cfg = feeConfig(settingsRows[0]?.data ?? {}, pos[0].overrides ?? {});
+      const lots = buildBuyLots(tradeRows);
+      if (side === "buy") {
+        net = round2(qtyN * priceN);
+        fee = round2(net * cfg.subscribePct / 100);
+        newCost = (qty * cost + net + fee) / (qty + qtyN);
+        newQty = qty + qtyN;
+      } else {
+        const est = sellFeeEstimate(lots, qtyN, priceN, cfg, tradeDate);
+        fee = est.fee; net = est.net; // net = 到账金额
+        newQty = Math.max(0, qty - qtyN);
+        newCost = cost;
+      }
+    } else if (side === "buy") {
+      newCost = (qty * cost + qtyN * priceN) / (qty + qtyN);
+      newQty = qty + qtyN;
     } else {
-      if (quantity > qty + 1e-9) return json({ error: "sell_exceeds_position", ok: false }, 400);
-      newQty = Math.max(0, qty - quantity);
+      newQty = Math.max(0, qty - qtyN);
       newCost = cost;
     }
     await insertRow(supabase, "trades", {
       id: crypto.randomUUID(), user_id: uid, position_id: pid, side, price: String(price),
       quantity: String(quantity), trade_date: tradeDate, source: "manual",
+      fee: fee == null ? null : String(fee), net_amount: net == null ? null : String(net),
       created_at: new Date().toISOString(),
     });
     const r = await supabase.from("positions")
       .update({ quantity: String(round(newQty)), cost_price: String(round(newCost, 4)), updated_at: new Date().toISOString() })
       .eq("id", pid).eq("user_id", uid);
     if (r.error) throw new Error("db_positions_update");
-    return json({ ok: true, quantity: String(round(newQty)), cost_price: String(round(newCost, 4)) });
+    return json({
+      ok: true, quantity: String(round(newQty)), cost_price: String(round(newCost, 4)),
+      fee: fee == null ? null : String(fee), net_amount: net == null ? null : String(net),
+    });
   }
 
   if (action === "add_dca") {
@@ -816,11 +890,12 @@ function planSchedule(body, base = {}) {
   return { freq, wday, mday };
 }
 
-// only whitelisted numeric rule keys survive
+// only whitelisted numeric rule keys survive ("FEE" carries the fund fee override, see sanitizeFeeCfg)
 function sanitizeRuleMap(obj, max = 10) {
   if (typeof obj !== "object" || obj === null) return {};
   const out = {};
   for (const [k, v] of Object.entries(obj).slice(0, max)) {
+    if (k === "FEE") continue;
     if (!/^(G|S|F|E|GD)\d$|^G\d+$/.test(k) || typeof v !== "object" || v === null) continue;
     const inner = {};
     for (const [ik, iv] of Object.entries(v).slice(0, 8)) {
@@ -831,7 +906,29 @@ function sanitizeRuleMap(obj, max = 10) {
   }
   return out;
 }
-function sanitizeOverrides(o) { return sanitizeRuleMap(o); }
+// { subscribePct: 0-2, tiers: [{maxDays int|null, pct 0-5}] max 6 }
+function sanitizeFeeCfg(f) {
+  if (typeof f !== "object" || f === null) return undefined;
+  const out = {};
+  if (Number.isFinite(f.subscribePct) && f.subscribePct >= 0 && f.subscribePct <= 2) out.subscribePct = f.subscribePct;
+  if (Array.isArray(f.tiers) && f.tiers.length && f.tiers.length <= 6) {
+    const tiers = f.tiers.map((tr) => {
+      if (typeof tr !== "object" || tr === null || !Number.isFinite(tr.pct) || tr.pct < 0 || tr.pct > 5) return null;
+      const maxDays = tr.maxDays == null ? null
+        : Number.isInteger(tr.maxDays) && tr.maxDays > 0 ? tr.maxDays : undefined;
+      return maxDays === undefined ? null : { maxDays, pct: tr.pct };
+    });
+    if (tiers.every((x) => x !== null)) out.tiers = tiers;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+function sanitizeOverrides(o) {
+  if (typeof o !== "object" || o === null) return {};
+  const out = sanitizeRuleMap(o);
+  const fee = sanitizeFeeCfg(o.FEE);
+  if (fee) out.FEE = fee;
+  return out;
+}
 function sanitizeSettings(s) {
   if (typeof s !== "object" || s === null) return {};
   const out = {};
@@ -844,5 +941,7 @@ function sanitizeSettings(s) {
   }
   if (Number.isFinite(s.targetGoldPct)) out.targetGoldPct = s.targetGoldPct;
   if (typeof s.global === "object" && s.global) out.global = sanitizeRuleMap(s.global);
+  const fee = sanitizeFeeCfg(s.fee);
+  if (fee) out.fee = fee;
   return out;
 }

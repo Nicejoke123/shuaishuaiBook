@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS trades (
   quantity VARCHAR(32) NOT NULL,
   trade_date VARCHAR(10) NOT NULL,
   source VARCHAR(12) NOT NULL DEFAULT 'manual',
+  fee VARCHAR(32) NULL,
+  net_amount VARCHAR(32) NULL,
   created_at VARCHAR(40) NOT NULL,
   KEY idx_trades_user_date (user_id, trade_date),
   KEY idx_trades_position (position_id)

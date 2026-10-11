@@ -27,6 +27,71 @@ export const DEFAULT_THRESHOLDS = {
 const fmt = (n, d = 2) => String(Number(Number(n).toFixed(d)));
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// ---------- OTC fund fee model (design 10.2): pure helpers, handler supplies data ----------
+export const DEFAULT_FEE = {
+  subscribePct: 0.15, // 申购费率 %（平台 1 折后典型值）
+  tiers: [
+    { maxDays: 7, pct: 1.5 },   // <7 天惩罚性赎回费
+    { maxDays: 365, pct: 0.5 }, // 7 天–1 年
+    { maxDays: 730, pct: 0.25 },// 1–2 年
+    { maxDays: null, pct: 0 },  // >2 年免
+  ],
+};
+
+// precedence: DEFAULT_FEE <- settings.fee <- position.overrides.FEE
+export function feeConfig(settings = {}, overrides = {}) {
+  const s = settings.fee ?? {}, o = overrides.FEE ?? {};
+  const pick = (...vals) => {
+    for (const v of vals) if (Array.isArray(v) && v.length) return v;
+    return null;
+  };
+  return {
+    subscribePct: o.subscribePct ?? s.subscribePct ?? DEFAULT_FEE.subscribePct,
+    tiers: pick(o.tiers, s.tiers, DEFAULT_FEE.tiers),
+  };
+}
+
+export function redeemRatePct(cfg, days) {
+  for (const tr of cfg.tiers) {
+    if (tr.maxDays == null || days < tr.maxDays) return Number(tr.pct) || 0;
+  }
+  return 0;
+}
+
+// replay buy/sell trades (ascending by date) into remaining FIFO buy lots
+export function buildBuyLots(trades) {
+  const lots = [];
+  for (const t of trades) {
+    const q = Number(t.quantity);
+    if (!(q > 0)) continue;
+    if (t.side === "buy") lots.push({ date: t.trade_date, qty: q });
+    else {
+      let need = q;
+      while (need > 1e-9 && lots.length) {
+        if (lots[0].qty <= need + 1e-9) { need -= lots[0].qty; lots.shift(); }
+        else { lots[0].qty -= need; need = 0; }
+      }
+    }
+  }
+  return lots;
+}
+
+// FIFO redemption fee for selling sellQty shares at nav on sellDate
+export function sellFeeEstimate(lots, sellQty, nav, cfg, sellDate) {
+  let need = sellQty, fee = 0;
+  for (const lot of lots) {
+    if (need <= 1e-9) break;
+    const take = Math.min(lot.qty, need);
+    need -= take;
+    fee += take * nav * redeemRatePct(cfg, daysBetween(lot.date, sellDate)) / 100;
+  }
+  const gross = sellQty * nav;
+  return {
+    fee: round2(fee), gross: round2(gross), net: round2(gross - fee),
+    pct: gross > 0 ? round2((fee / gross) * 100) : 0,
+  };
+}
+
 function movingAverage(closes, days) {
   if (closes.length < days) return null;
   const win = closes.slice(-days);
@@ -290,6 +355,20 @@ export function evaluatePosition(ctx) {
       const trend = below && falling ? "20日均线下方且均线向下，趋势偏弱" :
         below ? "价格低于20日均线" : "20日均线上方，趋势偏强";
       for (const a of advices) if (a.rule_id.startsWith("S")) a.detail.trend = trend;
+    }
+  }
+
+  // fund sell advices: show FIFO redemption-fee estimate and net proceeds (design 10.3)
+  if (position.asset_type === "fund" && ctx.feeCfg && ctx.buyLots?.length) {
+    for (const a of advices) {
+      if (a.action !== "sell") continue;
+      const gross = a.detail?.refAmount > 0 ? a.detail.refAmount : mv;
+      const est = sellFeeEstimate(ctx.buyLots, gross / price, price, ctx.feeCfg, ctx.today);
+      a.detail.redeemFee = est.fee;
+      a.detail.redeemNet = est.net;
+      a.reason += est.fee > 0.005
+        ? `；按持有期 FIFO 预计赎回费 ¥${fmt(est.fee, 0)}（约 ${fmt(est.pct, 2)}%），到手约 ¥${fmt(est.net, 0)}`
+        : `；当前持有期免赎回费，到手约 ¥${fmt(est.net, 0)}`;
     }
   }
 
