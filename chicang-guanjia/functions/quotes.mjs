@@ -42,6 +42,46 @@ export async function fetchTencentRealtime(codes) {
   return out;
 }
 
+// ---- Bank 积存金 realtime quotes (JD Finance aggregator; verified 2026-10-12) ----
+// Bank price ≈ SGE realtime + per-bank spread; 浙商 quotes run 24h. 招行 has NO public
+// feed (probed all CMB-* codes: empty), so it stays on the SGE basis.
+export const GOLD_BANKS = {
+  CZB: { jd: "CZB-JCJ", label: "浙商积存金" },
+  ICBC: { jd: "ICBC-JCJ", label: "工商积存金" },
+  CMBC: { jd: "CMBC-JCJ", label: "民生积存金" },
+  CNCB: { jd: "CNCB-JCJ", label: "中信积存金" },
+  CGB: { jd: "CGB-JCJ0", label: "广发积存金" },
+  CIB: { jd: "CIB-JCJ0", label: "兴业积存金" },
+};
+
+export async function fetchBankGoldRealtime(bank) {
+  const g = GOLD_BANKS[bank];
+  if (!g) throw new Error("unknown_gold_bank");
+  const res = await get(
+    `https://api.jdjygold.com/gw2/generic/produTools/h5/m/getGoldPrice?goldCode=${g.jd}`,
+  );
+  const json = await res.json();
+  const d = json?.resultData?.data;
+  const price = num(d?.lastPrice);
+  if (price == null || price <= 0) throw new Error("bank_gold_unavailable");
+  const prev = num(d?.preClose);
+  const rp = num(d?.raisePercent); // fraction, e.g. 0.0018699 = +0.187%
+  const t = d?.tradeDateTime; // serialized Java object
+  const p2 = (x) => String(x ?? 0).padStart(2, "0");
+  const quoteTime = t?.year
+    ? `${t.year}-${p2(t.monthValue)}-${p2(t.dayOfMonth)} ${p2(t.hour)}:${p2(t.minute)}:${p2(t.second)}`
+    : null;
+  return {
+    name: String(d?.name ?? g.label),
+    price,
+    prevClose: prev ?? price,
+    pct: rp != null ? Number((rp * 100).toFixed(2))
+      : prev ? Number((((price - prev) / prev) * 100).toFixed(2)) : 0,
+    quoteTime,
+    bankLabel: g.label,
+  };
+}
+
 // ---- Shanghai Gold Au99.99 (Sina, CNY per gram) — basis for 积存金 ----
 export async function fetchGoldRealtime() {
   const res = await get("https://hq.sinajs.cn/list=gds_AUTD", {
@@ -106,19 +146,79 @@ export async function fetchFundName(fundCode) {
 // quarterly top-10 holdings. Display only — never for advice or billing.
 
 export async function fetchFundIndexBinding(fundCode) {
-  // -> { indexCode: "sh000300", indexName, ftype } | null (null when no public index)
+  // -> { indexCode: "sh000300"|"usNDX"|null, indexName, ftype } | null
   const res = await get(
     `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNNBasicInformation?FCODE=${fundCode}&${FUND_QS}`,
   );
   const json = await res.json();
   const d = json?.Datas;
   if (!d) return null;
+  const ftype = d.FTYPE ?? null;
+  const disclosureDate = /^\d{4}-\d{2}-\d{2}$/.test(String(d.FEGMRQ ?? "")) ? d.FEGMRQ : null;
   const idx = String(d.INDEXCODE ?? "").trim();
-  if (!/^\d{6}$/.test(idx)) return null;
   const exch = String(d.NEWINDEXTEXCH ?? d.INDEXTEXCH ?? "");
-  const prefix = exch === "1" ? "sh" : exch === "0" ? "sz" : null;
-  if (!prefix) return null;
-  return { indexCode: prefix + idx, indexName: d.INDEXNAME ?? null, ftype: d.FTYPE ?? null };
+  if (/^\d{6}$/.test(idx)) {
+    const prefix = exch === "1" ? "sh" : exch === "0" ? "sz" : null;
+    if (prefix) return { indexCode: prefix + idx, indexName: d.INDEXNAME ?? null, ftype, disclosureDate };
+  }
+  const ov = OVERSEAS_INDEX_MAP[idx.toUpperCase()];
+  if (ov) return { indexCode: ov, indexName: d.INDEXNAME ?? null, ftype, disclosureDate, overseas: true };
+  return { indexCode: null, indexName: null, ftype, disclosureDate };
+}
+
+// ---- Overseas index quotes (Tencent; verified 2026-10-12) — QDII overnight estimate ----
+// Only codes whose layout we parsed & cross-checked are whitelisted (usSPX doesn't exist,
+// HKCEI/HSTECH field order differs from A-share layout → excluded until verified).
+export const OVERSEAS_INDEX_MAP = { NDX100: "usNDX", HSI: "hkHSI" };
+export const OVERSEAS_CODE_RE = /^(us|hk)[A-Z][A-Z0-9]{1,9}$/;
+
+export async function fetchOverseasIndex(code) {
+  const res = await get(`https://qt.gtimg.cn/q=${code}`);
+  const text = decodeGbk(await res.arrayBuffer());
+  const m = text.match(/v_[A-Za-z0-9]+="([^"]*)"/);
+  if (!m) throw new Error("overseas_index_unavailable");
+  const f = m[1].split("~");
+  const price = num(f[3]);
+  const prev = num(f[4]);
+  if (price == null) throw new Error("overseas_index_unavailable");
+  const quoteTime = f.slice(28, 33).find((x) => /20\d\d[-/]\d{2}[-/]\d{2}/.test(String(x))) ?? null;
+  return {
+    name: null,
+    price,
+    prevClose: prev,
+    pct: prev ? Number((((price - prev) / prev) * 100).toFixed(2)) : num(f[32]),
+    quoteTime,
+  };
+}
+
+// ---- Full top-10 holdings for display (持仓大头): A + HK + US, all markets ----
+export async function fetchFundHoldingsDetail(fundCode) {
+  const qs = FUND_QS;
+  const [posRes, basicRes] = await Promise.all([
+    get(`https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition?FCODE=${fundCode}&${qs}`),
+    get(`https://fundmobapi.eastmoney.com/FundMNewApi/FundMNNBasicInformation?FCODE=${fundCode}&${qs}`)
+      .catch(() => null),
+  ]);
+  const posJson = await posRes.json();
+  const stocks = posJson?.Datas?.fundStocks ?? [];
+  const marketOf = (t) => (t === "1" || t === "0" ? "A" : t === "116" ? "港"
+    : t === "105" || t === "106" || t === "107" ? "美" : "—");
+  const rows = stocks.slice(0, 10)
+    .map((s) => ({
+      code: String(s.GPDM ?? "").trim(),
+      name: s.GPJC ?? null,
+      market: marketOf(String(s.NEWTEXCH ?? "")),
+      weight_pct: num(s.JZBL),
+      change: ["增持", "减持", "不变", "新进"].includes(s.PCTNVCHGTYPE) ? s.PCTNVCHGTYPE : null,
+    }))
+    .filter((r) => r.code && r.weight_pct != null)
+    .sort((a, b) => b.weight_pct - a.weight_pct);
+  let disclosure_date = null;
+  try {
+    const d = (await basicRes?.json())?.Datas;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(d?.FEGMRQ ?? ""))) disclosure_date = d.FEGMRQ;
+  } catch { /* optional */ }
+  return { rows, disclosure_date };
 }
 
 export async function fetchFundTopHoldings(fundCode) {
@@ -192,12 +292,23 @@ export function isExchangeCode(code) {
 }
 
 export async function fetchRealtimeByCodes(codes) {
-  // codes: normalized list. Returns { [code]: {name, price, prevClose, pct, quoteTime} }
+  // codes: normalized list (+ optional overseas index codes like usNDX).
+  // Returns { [code]: {name, price, prevClose, pct, quoteTime} }
   const out = {};
   const exch = codes.filter(isExchangeCode);
   const funds = codes.filter(isFundCode);
+  const overseas = codes.filter((c) => OVERSEAS_CODE_RE.test(c));
   const gold = codes.includes(GOLD_CODE);
   const jobs = [];
+  if (overseas.length) {
+    jobs.push(
+      Promise.all(
+        overseas.map(async (code) => {
+          try { out[code] = await fetchOverseasIndex(code); } catch { /* per-code failure tolerated */ }
+        }),
+      ),
+    );
+  }
   if (exch.length) {
     jobs.push(
       fetchTencentRealtime(exch).then((m) => {

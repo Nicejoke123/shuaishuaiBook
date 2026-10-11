@@ -3,8 +3,8 @@
 // server-side validation. Numbers are stored as validated numeric strings.
 import {
   fetchRealtimeByCodes, fetchKlineHistory, fetchFundNavHistory, fetchFundName,
-  fetchFundIndexBinding, fetchFundTopHoldings,
-  lookupSymbol, isExchangeCode, isFundCode, GOLD_CODE,
+  fetchFundIndexBinding, fetchFundTopHoldings, fetchBankGoldRealtime, fetchFundHoldingsDetail,
+  lookupSymbol, isExchangeCode, isFundCode, GOLD_CODE, GOLD_BANKS,
 } from "./quotes.mjs";
 import { evaluatePosition, evaluateAllocation, feeConfig, buildBuyLots, sellFeeEstimate } from "./rules.mjs";
 
@@ -275,20 +275,23 @@ const SESSION = { start: 9 * 60 + 30, end: 15 * 60 };
 const META_TTL_MS = 7 * 86400000, META_RETRY_MS = 86400000;
 
 async function fundMeta(supabase, code) {
-  const key = `fundmeta:${code}`;
+  const key = `fundmeta2:${code}`; // v2: adds qdii flag (binding contract changed)
   const cached = await getRunState(supabase, key);
   const age = cached?.cached_at ? Date.now() - Date.parse(cached.cached_at) : Infinity;
-  const useful = cached && (cached.indexCode || (cached.holdings ?? []).length);
+  const useful = cached && (cached.indexCode || (cached.holdings ?? []).length || cached.qdii);
   if (cached && age < (useful ? META_TTL_MS : META_RETRY_MS)) return cached;
-  let indexCode = null, holdings = [];
+  let indexCode = null, holdings = [], qdii = false;
   try {
     const b = await fetchFundIndexBinding(code.slice(1));
-    if (b) indexCode = b.indexCode;
+    if (b) {
+      indexCode = b.indexCode ?? null;
+      qdii = /QDII|海外/.test(String(b.ftype ?? "")) || !!b.overseas;
+    }
   } catch { /* upstream failure */ }
   if (!indexCode) {
     try { holdings = await fetchFundTopHoldings(code.slice(1)); } catch { /* ignore */ }
   }
-  const meta = { indexCode, holdings, cached_at: new Date().toISOString() };
+  const meta = { indexCode, holdings, qdii, cached_at: new Date().toISOString() };
   await setRunState(supabase, key, meta);
   return meta;
 }
@@ -306,7 +309,10 @@ async function buildEstimates(supabase, fundCodes, latestNav) {
     if (!base) continue;
     if (m.indexCode && rt[m.indexCode]?.pct != null) {
       const pct = rt[m.indexCode].pct;
-      out[code] = { pct: round2(pct), est_nav: round2(base * (1 + pct / 100) * 1e2) / 1e2, basis: "index", label: "估" };
+      out[code] = {
+        pct: round2(pct), est_nav: round2(base * (1 + pct / 100) * 1e2) / 1e2,
+        basis: m.qdii ? "overseas" : "index", qdii: !!m.qdii, label: "估",
+      };
     } else if (m.holdings.length) {
       let acc = 0, cov = 0;
       for (const h of m.holdings) {
@@ -465,6 +471,18 @@ async function route(action, method, request, supabase, url) {
       if (!/^[0-9A-Za-z]{1,10}$/.test(q.trim())) return json({ ok: true, results: [] });
       return json({ ok: true, results: await lookupSymbol(q) });
     }
+    if (action === "holdings") {
+      // 基金持仓大头（最近季报披露的前十大，含港/美股）— 只读展示，不落库。
+      // 公开基金数据、不含用户信息，故与 lookup 一样无需 user_id。
+      const code = url.searchParams.get("code") ?? "";
+      if (!isFundCode(code)) return json({ error: "invalid_code", ok: false }, 400);
+      try {
+        const { rows, disclosure_date } = await fetchFundHoldingsDetail(code.slice(1));
+        return json({ ok: true, rows, disclosure_date });
+      } catch {
+        return json({ ok: false, error: "holdings_unavailable", rows: [], disclosure_date: null });
+      }
+    }
     const uid = url.searchParams.get("user_id");
     if (!UUID_RE.test(uid ?? "")) return json({ error: "invalid_user_id", ok: false }, 400);
     if (action === "dashboard") {
@@ -491,6 +509,15 @@ async function route(action, method, request, supabase, url) {
       const rtTargets = codes.filter((c) => isExchangeCode(c) || c === GOLD_CODE);
       let realtime = {};
       try { realtime = await fetchRealtimeByCodes(rtTargets); } catch { /* snapshot fallback */ }
+      // 积存金渠道：展示价用所选银行实时价（快照/规则仍按 SGE 基准，不受影响）
+      const gb = positions.find((p) => p.asset_type === "gold"
+        && GOLD_BANKS[p.overrides?.gold_bank ?? ""]);
+      if (gb) {
+        try {
+          const bq = await fetchBankGoldRealtime(gb.overrides.gold_bank);
+          for (const p of positions) if (p.asset_type === "gold" && p.code === gb.code) realtime[p.code] = bq;
+        } catch { /* keep SGE */ }
+      }
       const view = buildPositionsView(positions, realtime,
         Object.fromEntries(Object.entries(latest).map(([k, v]) => [k, v.price])), parts0.today);
       const total = view.reduce((s, v) => s + (v.market_value || 0), 0);
@@ -533,10 +560,17 @@ async function route(action, method, request, supabase, url) {
       const exchSession = tradingToday && parts.minutes >= SESSION.start && parts.minutes < SESSION.end;
       const goldSession = tradingToday && parts.minutes >= 9 * 60 && parts.minutes < CUTOFF.gold;
       const positions = await selectWhere(supabase, "positions",
-        "code,name,asset_type,quantity", { user_id: uid });
+        "code,name,asset_type,quantity,overrides", { user_id: uid });
       const codes = [...new Set(positions.map((p) => p.code))];
       let realtime = {};
       try { realtime = await fetchRealtimeByCodes(codes); } catch { /* rows fall back to snapshots/none */ }
+      // 积存金渠道：选了银行价的持仓用银行实时价，接口失败自动回退上面的 SGE 基准
+      const goldBankOf = (p) => (p.asset_type === "gold" && GOLD_BANKS[p.overrides?.gold_bank ?? ""]
+        ? p.overrides.gold_bank : null);
+      const banks = [...new Set(positions.map(goldBankOf).filter(Boolean))];
+      await Promise.all(banks.map(async (b) => {
+        try { realtime[`GOLD_${b}`] = await fetchBankGoldRealtime(b); } catch { /* fall back to SGE */ }
+      }));
       // feed down (e.g. SGE weekends) -> fall back to the two last recorded snapshots
       const missing = codes.filter((c) => realtime[c]?.price == null);
       const snapFallback = {};
@@ -567,12 +601,23 @@ async function route(action, method, request, supabase, url) {
         }
         try { estimates = await buildEstimates(supabase, estTargets, base); } catch { /* optional */ }
       }
+      // QDII 标记（pending/estimate 文案用）；fundMeta 有 7 天缓存，命中时零上游调用
+      const qdiiByCode = {};
+      await Promise.all(
+        codes.filter((c) => isFundCode(c) && navDateOf(c) !== anchor).map(async (c) => {
+          try { qdiiByCode[c] = !!(await fundMeta(supabase, c)).qdii; } catch { /* optional */ }
+        }),
+      );
       const byType = { fund: [], etf: [], gold: [], stock: [] };
       for (const p of positions) {
         const qty = Number(p.quantity);
-        const r = realtime[p.code] ?? snapFallback[p.code];
+        const bk = goldBankOf(p);
+        const bankRt = bk ? realtime[`GOLD_${bk}`] : null;
+        const r = bankRt ?? realtime[p.code] ?? snapFallback[p.code];
         const row = { code: p.code, name: p.name, status: "none", price: null, prev_close: null,
-          day_pct: null, day_amount: null, market_value: null, ref_date: null, basis: null };
+          day_pct: null, day_amount: null, market_value: null, ref_date: null, basis: null,
+          bank: bk ? (bankRt ? bankRt.bankLabel : "SGE基准(渠道暂不可用)") : null,
+          is_qdii: p.asset_type === "fund" ? !!qdiiByCode[p.code] : undefined };
         if (r && r.price != null) {
           const nav = Number(r.price);
           const prev = r.prevClose != null ? Number(r.prevClose) : null;
@@ -601,7 +646,9 @@ async function route(action, method, request, supabase, url) {
               }
             }
           } else {
-            row.status = (!r.fromSnapshot && (p.asset_type === "gold" ? goldSession : exchSession)) ? "realtime" : "closed";
+            const bankLive = !!bankRt && String(bankRt.quoteTime ?? "").slice(0, 10) === parts.today;
+            row.status = (!r.fromSnapshot && (p.asset_type === "gold"
+              ? (goldSession || bankLive) : exchSession)) ? "realtime" : "closed";
             row.ref_date = tradingToday ? parts.today : anchor;
             row.price = nav;
             row.prev_close = prev;
@@ -803,6 +850,19 @@ async function route(action, method, request, supabase, url) {
     }
     if (body.overrides !== undefined) {
       patch.overrides = body.overrides === null ? null : sanitizeOverrides(body.overrides);
+    }
+    if (body.gold_bank !== undefined) {
+      // 积存金报价渠道：白名单银行 key；"" 回到 SGE 基准。存进 overrides JSON，无 DDL。
+      const cur = await selectWhere(supabase, "positions", "asset_type,overrides",
+        { id: pid, user_id: uid });
+      if (!cur.length) return json({ error: "not_found", ok: false }, 404);
+      if (cur[0].asset_type !== "gold") return json({ error: "not_gold_position", ok: false }, 400);
+      const bk = String(body.gold_bank ?? "").trim();
+      const o = sanitizeOverrides(patch.overrides ?? cur[0].overrides ?? {});
+      if (bk === "") delete o.gold_bank;
+      else if (GOLD_BANKS[bk]) o.gold_bank = bk;
+      else return json({ error: "invalid_gold_bank", ok: false }, 400);
+      patch.overrides = Object.keys(o).length ? o : null;
     }
     patch.updated_at = new Date().toISOString();
     if (Object.keys(patch).length <= 1) return json({ error: "empty_patch", ok: false }, 400);
