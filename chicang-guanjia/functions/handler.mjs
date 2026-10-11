@@ -571,7 +571,7 @@ async function route(action, method, request, supabase, url) {
       for (const p of positions) {
         const qty = Number(p.quantity);
         const r = realtime[p.code] ?? snapFallback[p.code];
-        const row = { code: p.code, name: p.name, status: "none",
+        const row = { code: p.code, name: p.name, status: "none", price: null, prev_close: null,
           day_pct: null, day_amount: null, market_value: null, ref_date: null, basis: null };
         if (r && r.price != null) {
           const nav = Number(r.price);
@@ -603,6 +603,8 @@ async function route(action, method, request, supabase, url) {
           } else {
             row.status = (!r.fromSnapshot && (p.asset_type === "gold" ? goldSession : exchSession)) ? "realtime" : "closed";
             row.ref_date = tradingToday ? parts.today : anchor;
+            row.price = nav;
+            row.prev_close = prev;
             row.day_pct = pctv;
             row.day_amount = prev != null ? round2((nav - prev) * qty) : null;
             row.market_value = round2(nav * qty);
