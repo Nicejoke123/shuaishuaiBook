@@ -35,7 +35,7 @@
 | `DB_PASSWORD` | 数据库密码 |
 | `DB_NAME` | 库名，如 `chicang` |
 
-如果使用云托管自带的 MySQL，平台会自动注入 `WX_MYSQL_ADDRESS / WX_MYSQL_USER / WX_MYSQL_PWD / WX_MYSQL_DATABASE`，这些也能被自动识别，可以不填上面的变量（显式 `DB_*` 优先）。
+如果使用云托管自带的 MySQL，平台会自动注入 `MYSQL_ADDRESS / MYSQL_USERNAME / MYSQL_PASSWORD`（部分版本为 `WX_MYSQL_*`），主机/端口/账号/密码都能自动识别，只需额外添加一个 `DB_NAME`（填你的库名，如 `chicang`）即可。
 
 ## 四、开启公网访问并验收
 

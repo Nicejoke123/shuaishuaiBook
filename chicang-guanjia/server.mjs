@@ -52,16 +52,16 @@ async function initDb() {
     console.log(`[db] DEV memory mode (node:sqlite, file=${file}) — not for production`);
     return { pool: createMemoryPool({ file }), mode: "memory" };
   }
-  // WeChat CloudRun injects WX_MYSQL_* when the built-in MySQL is enabled;
-  // explicit DB_* variables always win.
-  const wxAddr = (process.env.WX_MYSQL_ADDRESS ?? "").split(":");
+  // WeChat CloudRun injects MYSQL_ADDRESS(host:port)/MYSQL_USERNAME/MYSQL_PASSWORD
+  // for its built-in MySQL (WX_MYSQL_* in some versions); explicit DB_* always wins.
+  const wxAddr = (process.env.DB_ADDRESS || process.env.WX_MYSQL_ADDRESS || process.env.MYSQL_ADDRESS || "").split(":");
   const host = process.env.DB_HOST || wxAddr[0] || "";
   const port = Number(process.env.DB_PORT || wxAddr[1] || 3306);
-  const user = process.env.DB_USER || process.env.WX_MYSQL_USER || "";
-  const password = process.env.DB_PASSWORD || process.env.DB_PASS || process.env.WX_MYSQL_PWD || "";
+  const user = process.env.DB_USER || process.env.WX_MYSQL_USER || process.env.MYSQL_USERNAME || "";
+  const password = process.env.DB_PASSWORD || process.env.DB_PASS || process.env.WX_MYSQL_PWD || process.env.MYSQL_PASSWORD || "";
   const database = process.env.DB_NAME || process.env.WX_MYSQL_DATABASE || "";
   if (!host || !user || !password || !database) {
-    throw new Error("db_env_missing: set DB_HOST/DB_USER/DB_PASSWORD/DB_NAME (or use cloud MySQL WX_MYSQL_*), or DB_DEV=memory for local smoke");
+    throw new Error("db_env_missing: set DB_NAME (database) — host/user/password auto-detected from MYSQL_ADDRESS/MYSQL_USERNAME/MYSQL_PASSWORD, or set DB_HOST/DB_USER/DB_PASSWORD explicitly; DB_DEV=memory for local smoke");
   }
   const mysql = (await import("mysql2/promise")).default;
   const pool = mysql.createPool({
