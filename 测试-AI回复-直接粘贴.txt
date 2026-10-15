@@ -1,0 +1,234 @@
+好的！我已经把你的课表整理成了甩甩日程需要的 JSON 格式，如下：
+
+```json
+{
+  "app": "shuaishuaiBook",
+  "version": 1,
+  "data": {
+    "kb_term": {
+      "start": "2027-03-01",
+      "end": "2027-06-20"
+    },
+    "kb_courses": [
+      {
+        "id": "c1dux5z3",
+        "cls": "c-imp0",
+        "name": "传播学理论前沿",
+        "weeks": "1–16周",
+        "teacher": "曹珊",
+        "room": "IV210",
+        "phases": [
+          1,
+          2
+        ],
+        "credit": 3,
+        "cat": "专业基础课",
+        "slots": [
+          {
+            "day": 1,
+            "row": "r12"
+          },
+          {
+            "day": 1,
+            "row": "r34"
+          },
+          {
+            "day": 3,
+            "row": "r56"
+          }
+        ]
+      },
+      {
+        "id": "c1hvs11o",
+        "cls": "c-imp1",
+        "name": "数据新闻实务",
+        "weeks": "1–8周",
+        "teacher": "周懿",
+        "room": "机房4",
+        "phases": [
+          1
+        ],
+        "credit": 2,
+        "cat": "专业选修课",
+        "slots": [
+          {
+            "day": 2,
+            "row": "r34"
+          },
+          {
+            "day": 4,
+            "row": "r34"
+          }
+        ]
+      },
+      {
+        "id": "c8qavzo",
+        "cls": "c-imp2",
+        "name": "融合新闻报道",
+        "weeks": "1–16周",
+        "teacher": "赵鹏",
+        "room": "IV305",
+        "phases": [
+          1,
+          2
+        ],
+        "credit": 2,
+        "cat": "专业基础课",
+        "slots": [
+          {
+            "day": 2,
+            "row": "r56"
+          },
+          {
+            "day": 2,
+            "row": "r78"
+          }
+        ]
+      },
+      {
+        "id": "cfdzq6d",
+        "cls": "c-imp3",
+        "name": "计算传播研究",
+        "weeks": "9–16周",
+        "teacher": "沈荟",
+        "room": "IV114",
+        "phases": [
+          2
+        ],
+        "credit": 2,
+        "cat": "专业选修课",
+        "slots": [
+          {
+            "day": 3,
+            "row": "r12"
+          },
+          {
+            "day": 3,
+            "row": "r34"
+          }
+        ]
+      },
+      {
+        "id": "c18lwa7i",
+        "cls": "c-imp4",
+        "name": "学术英语写作与交流（硕士）",
+        "weeks": "待安排",
+        "teacher": "陈鑫盛",
+        "room": "待安排",
+        "phases": [],
+        "credit": 1,
+        "cat": "公共课",
+        "slots": []
+      },
+      {
+        "id": "c1chvqrl",
+        "cls": "c-imp5",
+        "name": "新时代中国特色社会主义理论与实践",
+        "weeks": "1–8周",
+        "teacher": "李大山",
+        "room": "IV301",
+        "phases": [
+          1
+        ],
+        "credit": 2,
+        "cat": "公共课",
+        "slots": [
+          {
+            "day": 5,
+            "row": "r12"
+          },
+          {
+            "day": 5,
+            "row": "r34"
+          }
+        ]
+      },
+      {
+        "id": "coppbhk",
+        "cls": "c-imp6",
+        "name": "公共体育（气排球）",
+        "weeks": "9–16周",
+        "teacher": "朱侨宇",
+        "room": "体育馆",
+        "phases": [
+          2
+        ],
+        "credit": 1,
+        "cat": "素质课",
+        "slots": [
+          {
+            "day": 4,
+            "row": "r56"
+          }
+        ]
+      },
+      {
+        "id": "cj2k6qn",
+        "cls": "c-imp7",
+        "name": "毕业论文开题指导",
+        "weeks": "1–16周",
+        "teacher": "导师组",
+        "room": "待安排",
+        "phases": [
+          1,
+          2
+        ],
+        "credit": 2,
+        "cat": "专业基础课",
+        "slots": [
+          {
+            "day": 5,
+            "row": "rev",
+            "slotLabel": "第 11–12 节 ｜ 20:00 – 21:40"
+          }
+        ]
+      }
+    ],
+    "kb_tasks_c1dux5z3": [
+      {
+        "id": "t_demo_1",
+        "text": "第一周研讨：准备一篇近期传播学论文的评述",
+        "due": "",
+        "done": false,
+        "time": "2026-10-15 12:12",
+        "mtime": 1792037523
+      },
+      {
+        "id": "t_demo_2",
+        "text": "期中研究设计（3 月底交）",
+        "due": "2027-03-30",
+        "done": false,
+        "time": "2026-10-15 12:12",
+        "mtime": 1792037523
+      }
+    ],
+    "kb_notes_c1dux5z3": [
+      {
+        "id": "n_demo_1",
+        "text": "导入测试：这是挂在新课上的笔记",
+        "time": "2026-10-15 12:12",
+        "mtime": 1792037523
+      }
+    ],
+    "kb_custom": [
+      {
+        "id": "e_demo_1",
+        "title": "春季学期开学班会",
+        "date": "2027-03-01",
+        "start": "18:00",
+        "end": "19:00",
+        "room": "IV210",
+        "color": "#3f9bdc",
+        "mtime": 1792037523
+      }
+    ]
+  }
+}
+```
+
+说明一下：
+- 学期按 2027 年 3 月 1 日（周一）开学、6 月 20 日结束整理，共 16 周；
+- 「学术英语写作与交流」和「毕业论文开题指导」课表上没排固定时间，标了「待安排」；
+- 顺便给「传播学理论前沿」附了 2 条示例作业、1 条笔记，另加了一条开学班会的日程，方便你验证合并效果。
+
+如果周次或时间有出入，告诉我，我马上调整～
